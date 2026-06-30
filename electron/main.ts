@@ -1,8 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -38,9 +37,8 @@ type KubectlResult = {
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
-function defaultKubeconfigPath() {
-  return path.join(homedir(), ".kube", "config");
-}
+const STREAM_CHANNEL = "kubectl:stream:event";
+const activeStreams = new Map<string, ReturnType<typeof spawn>>();
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -56,8 +54,7 @@ async function readSettings(): Promise<Settings> {
         : []
     };
   } catch {
-    const fallback = defaultKubeconfigPath();
-    return { kubeconfigPaths: existsSync(fallback) ? [fallback] : [] };
+    return { kubeconfigPaths: [] };
   }
 }
 
@@ -96,6 +93,9 @@ function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
   const env = { ...process.env };
   if (request.kubeconfigPaths?.length) {
     env.KUBECONFIG = request.kubeconfigPaths.join(path.delimiter);
+  } else {
+    // Sin kubeconfig registrado no usamos ningun archivo por defecto (~/.kube/config).
+    env.KUBECONFIG = path.join(app.getPath("userData"), "kubeui-no-kubeconfig");
   }
 
   return new Promise((resolve) => {
@@ -199,6 +199,7 @@ function createWindow() {
     minHeight: 680,
     title: "kubeui",
     backgroundColor: "#eef2f7",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(currentDir, "../electron/preload.cjs"),
       contextIsolation: true,
@@ -223,6 +224,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   createWindow();
 
   app.on("activate", () => {
@@ -238,7 +240,6 @@ ipcMain.handle("settings:get", async () => {
   const settings = await readSettings();
   return {
     ...settings,
-    defaultKubeconfigPath: defaultKubeconfigPath(),
     pathDelimiter: path.delimiter
   };
 });
@@ -263,13 +264,6 @@ ipcMain.handle("settings:removeKubeconfig", async (_event, kubeconfigPath: strin
   const next = {
     kubeconfigPaths: current.kubeconfigPaths.filter((item) => item !== kubeconfigPath)
   };
-  await writeSettings(next);
-  return next;
-});
-
-ipcMain.handle("settings:resetDefaultKubeconfig", async () => {
-  const fallback = defaultKubeconfigPath();
-  const next = { kubeconfigPaths: existsSync(fallback) ? [fallback] : [] };
   await writeSettings(next);
   return next;
 });
@@ -327,4 +321,81 @@ ipcMain.handle("kubectl:pickYamlFile", async () => {
     path: response.filePaths[0],
     content: await readFile(response.filePaths[0], "utf8")
   };
+});
+
+type KubectlStreamRequest = {
+  streamId: string;
+  args?: string[];
+  command?: string;
+  kubeconfigPaths?: string[];
+  context?: string;
+  namespace?: string;
+};
+
+ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
+  const { streamId } = request;
+  let args: string[];
+  try {
+    args = request.command !== undefined ? parseCommandLine(request.command) : request.args ?? [];
+    if (!args.length) throw new Error("Ingresa un comando kubectl.");
+  } catch (error) {
+    event.sender.send(STREAM_CHANNEL, {
+      streamId,
+      type: "end",
+      code: null,
+      error: error instanceof Error ? error.message : String(error),
+      command: request.command ?? ""
+    });
+    return { streamId, command: request.command ?? "" };
+  }
+
+  const fullArgs = buildKubectlArgs({
+    args,
+    context: request.context,
+    namespace: request.namespace
+  });
+  const command = ["kubectl", ...fullArgs].map(quoteForDisplay).join(" ");
+
+  const env = { ...process.env };
+  if (request.kubeconfigPaths?.length) {
+    env.KUBECONFIG = request.kubeconfigPaths.join(path.delimiter);
+  } else {
+    env.KUBECONFIG = path.join(app.getPath("userData"), "kubeui-no-kubeconfig");
+  }
+
+  const child = spawn("kubectl", fullArgs, { env, shell: false, windowsHide: true });
+  activeStreams.set(streamId, child);
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    event.sender.send(STREAM_CHANNEL, { streamId, type: "data", chunk: chunk.toString() });
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    event.sender.send(STREAM_CHANNEL, { streamId, type: "data", chunk: chunk.toString() });
+  });
+  child.on("error", (error) => {
+    activeStreams.delete(streamId);
+    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code: null, error: error.message, command });
+  });
+  child.on("close", (code) => {
+    activeStreams.delete(streamId);
+    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code, command });
+  });
+
+  return { streamId, command };
+});
+
+ipcMain.handle("kubectl:streamStop", (_event, streamId: string) => {
+  const child = activeStreams.get(streamId);
+  if (child) {
+    child.kill();
+    activeStreams.delete(streamId);
+  }
+  return true;
+});
+
+app.on("before-quit", () => {
+  for (const child of activeStreams.values()) {
+    child.kill();
+  }
+  activeStreams.clear();
 });

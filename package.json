@@ -36,6 +36,9 @@
     "vite": "^6.0.5",
     "wait-on": "^8.0.1"
   },
+  "overrides": {
+    "@noble/hashes": "1.8.0"
+  },
   "build": {
     "appId": "com.kubeui.app",
     "productName": "kubeui",
@@ -59,6 +62,12 @@
         "portable",
         "nsis"
       ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "runAfterFinish": true
     }
   }
 }

@@ -24,3 +24,6 @@ npm-debug.log*
 .idea/
 *.swp
 *.swo
+
+fix-electron-node22.bat
+make-ca-bundle.ps1

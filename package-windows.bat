@@ -33,7 +33,7 @@ echo.
 if not exist "node_modules" (
   echo Dependencies are missing. Installing them now...
   echo.
-  npm install
+  call npm install
   if errorlevel 1 (
     echo.
     echo Install failed.
@@ -44,7 +44,7 @@ if not exist "node_modules" (
 
 echo Building and packaging kubeui...
 echo.
-npm run dist
+call npm run dist
 if errorlevel 1 (
   echo.
   echo Packaging failed.

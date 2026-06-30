@@ -23,7 +23,7 @@ if not exist "node_modules" (
   exit /b 1
 )
 
-npm run dev
+call npm run dev
 if errorlevel 1 (
   echo.
   echo Start failed.

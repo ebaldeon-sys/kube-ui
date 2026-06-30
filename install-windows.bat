@@ -31,7 +31,7 @@ echo Node: %NODE_VERSION%
 echo npm: %NPM_VERSION%
 echo.
 
-npm install
+call npm install
 if errorlevel 1 (
   echo.
   echo Install failed.
