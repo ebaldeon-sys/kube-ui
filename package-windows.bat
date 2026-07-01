@@ -56,4 +56,5 @@ echo.
 echo Packaging completed.
 echo Check the release folder for the generated Windows executable.
 echo.
+if exist "release" start "" "release"
 pause

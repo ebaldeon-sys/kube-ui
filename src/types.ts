@@ -42,6 +42,12 @@ export type kubeuiApi = {
     context?: string;
     namespace?: string;
   }) => Promise<KubectlResult>;
+  replaceYaml: (request: {
+    yaml: string;
+    kubeconfigPaths?: string[];
+    context?: string;
+    namespace?: string;
+  }) => Promise<KubectlResult>;
   pickYamlFile: () => Promise<PickedYamlFile | null>;
   streamKubectl: (
     request: {

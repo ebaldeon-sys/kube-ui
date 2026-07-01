@@ -13,10 +13,16 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 1040px;
-  min-height: 680px;
+  overflow: hidden;
   background: #e8edf4;
 }
 
@@ -41,10 +47,20 @@ button:disabled {
 .app-shell {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  height: 100vh;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Vista ampliada de logs: se mantienen las pestanas; se ocultan sidebar,
+   barra de sesion y statusbar. El area de trabajo ocupa el resto. */
+.app-shell.logs-expanded {
+  grid-template-rows: auto 1fr;
 }
 
 .tabstrip {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -135,6 +151,9 @@ button:disabled {
 }
 
 .statusbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -236,6 +255,8 @@ button:disabled {
   flex-direction: column;
   gap: 16px;
   padding: 16px;
+  min-height: 0;
+  overflow-y: auto;
   background: #111827;
   color: #d8e0ec;
 }
@@ -286,6 +307,25 @@ button:disabled {
 
 .resource-list {
   padding-top: 0;
+}
+
+.resource-list {
+  display: grid;
+  gap: 14px;
+}
+
+.resource-group {
+  display: grid;
+  gap: 4px;
+}
+
+.resource-group-title {
+  padding: 0 10px;
+  color: #6b7a90;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
 }
 
 .side-actions {
@@ -382,13 +422,12 @@ button:disabled {
 .session-bar code {
   flex: 1;
   min-width: 180px;
-  overflow: hidden;
+  overflow-x: auto;
   padding: 9px 10px;
   color: #43516a;
   background: #f4f7fb;
   border: 1px solid #d8e0ec;
   border-radius: 6px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -619,9 +658,76 @@ pre {
 }
 
 .logs-panel .logs-view,
+.logs-panel .logs-vscroll,
 .logs-panel pre,
 .logs-panel .logs-empty {
   flex: 1;
+}
+
+.logs-mode {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: #0b1020;
+  border: 1px solid #2a3650;
+  border-radius: 7px;
+}
+
+.logs-mode-btn {
+  height: 28px;
+  padding: 0 12px;
+  color: #9aa6bd;
+  background: transparent;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.logs-mode-btn.active {
+  color: #e6edf7;
+  background: #2a3650;
+}
+
+.logs-rangebar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #131b2c;
+  border-bottom: 1px solid #243149;
+}
+
+.logs-rangebar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #9aa6bd;
+  font-size: 11px;
+}
+
+.logs-rangebar input {
+  height: 32px;
+  padding: 0 8px;
+  color: #e6edf7;
+  background: #0b1020;
+  border: 1px solid #2a3650;
+  border-radius: 6px;
+  color-scheme: dark;
+}
+
+.logs-range-hint {
+  color: #6b7793;
+  font-size: 11px;
+  padding-bottom: 8px;
+}
+
+.logs-notice {
+  padding: 8px 16px;
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.1);
+  border-bottom: 1px solid #243149;
+  font-size: 12px;
 }
 
 .logs-search {
@@ -685,16 +791,19 @@ pre {
   border-radius: 2px;
 }
 
-.log-row.is-match {
+.log-row.is-match,
+.log-vrow.is-match {
   background: rgba(253, 224, 71, 0.08);
 }
 
-.log-row.is-current {
+.log-row.is-current,
+.log-vrow.is-current {
   background: rgba(253, 224, 71, 0.16);
   box-shadow: inset 2px 0 0 #fde047;
 }
 
-.log-row.is-current .log-hit {
+.log-row.is-current .log-hit,
+.log-vrow.is-current .log-hit {
   background: #fb923c;
 }
 
@@ -799,6 +908,99 @@ pre {
   background: #060912;
 }
 
+/* Lista de logs virtualizada: filas de alto fijo, una sola linea. */
+.logs-vscroll {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #0b1020;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.logs-vspace {
+  position: relative;
+  width: 100%;
+}
+
+.logs-vrows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+
+.log-vrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  color: #d8e0ec;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.log-vrow.clickable {
+  cursor: pointer;
+}
+
+.log-vrow:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.log-vrow.is-selected {
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow: inset 2px 0 0 #3b82f6;
+}
+
+.log-vrow.log-error {
+  border-left-color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.log-vrow.log-warn {
+  border-left-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.log-vrow .log-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-detail {
+  flex: 0 0 auto;
+  max-height: 38%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #243149;
+  background: #060912;
+}
+
+.log-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  color: #9aa6bd;
+  font-size: 12px;
+  border-bottom: 1px solid #1b2740;
+}
+
+.log-detail pre {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 14px;
+  color: #d8e0ec;
+}
+
 .terminal-input {
   display: flex;
   align-items: center;
@@ -831,6 +1033,31 @@ pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 24px;
+  color: #67748a;
+  font-size: 13px;
+}
+
+.loading-state .spin {
+  color: #246bfe;
+  animation: kube-spin 0.9s linear infinite;
+}
+
+@keyframes kube-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .file-list {
@@ -901,4 +1128,54 @@ pre {
   padding: 2px 5px;
   background: #eef2f7;
   border-radius: 4px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.modal {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  background: #ffffff;
+  border: 1px solid #d8e0ec;
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+}
+
+.modal-message {
+  margin: 0;
+  color: #172033;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.modal-input {
+  height: 38px;
+  padding: 0 11px;
+  color: #172033;
+  background: #ffffff;
+  border: 1px solid #cbd5e4;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.modal-input:focus {
+  outline: none;
+  border-color: #246bfe;
+  box-shadow: 0 0 0 3px rgba(36, 107, 254, 0.18);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }

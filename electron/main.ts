@@ -310,6 +310,25 @@ ipcMain.handle("kubectl:applyYaml", async (_event, request: Omit<KubectlRunReque
   }
 });
 
+// Equivalente no interactivo de `kubectl edit`: reemplaza el objeto vivo con el
+// YAML editado (PUT). Respeta el resourceVersion del manifiesto para control de
+// concurrencia y no mantiene la anotacion last-applied-configuration.
+ipcMain.handle("kubectl:replaceYaml", async (_event, request: Omit<KubectlRunRequest, "args"> & { yaml: string }) => {
+  const filePath = path.join(tmpdir(), `kubeui-${randomUUID()}.yaml`);
+  await writeFile(filePath, request.yaml, "utf8");
+  try {
+    return await runKubectl({
+      args: ["replace", "-f", filePath],
+      kubeconfigPaths: request.kubeconfigPaths,
+      context: request.context,
+      namespace: request.namespace,
+      timeoutMs: 120_000
+    });
+  } finally {
+    await unlink(filePath).catch(() => undefined);
+  }
+});
+
 ipcMain.handle("kubectl:pickYamlFile", async () => {
   const response = await dialog.showOpenDialog({
     title: "Seleccionar YAML",

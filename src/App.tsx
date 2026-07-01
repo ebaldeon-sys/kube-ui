@@ -9,8 +9,12 @@ import {
   Layers3,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
+  Pencil,
   Play,
   Plus,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   RotateCcw,
   Scale3D,
@@ -27,7 +31,22 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KubectlResult, Settings as AppSettings } from "./types";
 
-type ResourceKey = "pods" | "deployments" | "services" | "configmaps" | "secrets" | "ingress" | "nodes";
+type ResourceKey =
+  | "pods"
+  | "deployments"
+  | "statefulsets"
+  | "daemonsets"
+  | "replicasets"
+  | "cronjobs"
+  | "jobs"
+  | "services"
+  | "ingress"
+  | "configmaps"
+  | "secrets"
+  | "persistentvolumeclaims"
+  | "horizontalpodautoscalers"
+  | "namespaces"
+  | "nodes";
 type ViewMode = "table" | "details" | "yaml" | "logs" | "terminal" | "apply" | "settings";
 
 type ResourceConfig = {
@@ -35,6 +54,7 @@ type ResourceConfig = {
   label: string;
   kubectlName: string;
   namespaced: boolean;
+  editable?: boolean;
   columns: Array<{ key: string; label: string; getter: (item: KubeItem) => string }>;
 };
 
@@ -48,6 +68,17 @@ type KubeItem = {
   status?: Record<string, unknown>;
   spec?: Record<string, unknown>;
   type?: string;
+};
+
+// Estado que se persiste por kind dentro de una pestaña, para que al
+// volver a un recurso se restaure exactamente donde se quedo el usuario.
+type ResourceSnapshot = {
+  rows: KubeItem[];
+  selectedName: string;
+  viewMode: ViewMode;
+  outputTitle: string;
+  output: string;
+  lastCommand: string;
 };
 
 type TabSession = {
@@ -65,7 +96,13 @@ type TabSession = {
   terminalCommand: string;
   terminalOutput: string;
   yamlDraft: string;
+  // El panel de YAML se abrio para editar un recurso existente (Editar): al
+  // guardar se usa `kubectl replace` (estilo edit). Si es false, es un Apply
+  // YAML libre (archivo/pegado) y se usa `kubectl apply`.
+  yamlEditMode: boolean;
   loading: boolean;
+  // Cache por kind: guarda el ultimo estado antes de cambiar de recurso.
+  resourceCache: Partial<Record<ResourceKey, ResourceSnapshot>>;
 };
 
 const resourceConfigs: ResourceConfig[] = [
@@ -92,6 +129,69 @@ const resourceConfigs: ResourceConfig[] = [
       { key: "ready", label: "Ready", getter: (item) => `${numberAt(item.status?.readyReplicas)}/${numberAt(item.status?.replicas)}` },
       { key: "updated", label: "Updated", getter: (item) => stringAt(item.status?.updatedReplicas) },
       { key: "available", label: "Available", getter: (item) => stringAt(item.status?.availableReplicas) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "statefulsets",
+    label: "StatefulSets",
+    kubectlName: "statefulsets",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "ready", label: "Ready", getter: (item) => `${numberAt(item.status?.readyReplicas)}/${numberAt(item.status?.replicas)}` },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "daemonsets",
+    label: "DaemonSets",
+    kubectlName: "daemonsets",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "desired", label: "Desired", getter: (item) => stringAt(item.status?.desiredNumberScheduled) },
+      { key: "current", label: "Current", getter: (item) => stringAt(item.status?.currentNumberScheduled) },
+      { key: "ready", label: "Ready", getter: (item) => stringAt(item.status?.numberReady) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "replicasets",
+    label: "ReplicaSets",
+    kubectlName: "replicasets",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "desired", label: "Desired", getter: (item) => stringAt(item.spec?.replicas) },
+      { key: "current", label: "Current", getter: (item) => stringAt(item.status?.replicas) },
+      { key: "ready", label: "Ready", getter: (item) => stringAt(item.status?.readyReplicas) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "cronjobs",
+    label: "CronJobs",
+    kubectlName: "cronjobs",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "schedule", label: "Schedule", getter: (item) => stringAt(item.spec?.schedule) },
+      { key: "suspend", label: "Suspendido", getter: (item) => ((item.spec as { suspend?: boolean })?.suspend ? "Sí" : "No") },
+      { key: "active", label: "Activos", getter: (item) => String(((item.status as { active?: unknown[] })?.active ?? []).length) },
+      { key: "lastSchedule", label: "Última ejec.", getter: (item) => age((item.status as { lastScheduleTime?: string })?.lastScheduleTime) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "jobs",
+    label: "Jobs",
+    kubectlName: "jobs",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "completions", label: "Completions", getter: (item) => `${numberAt(item.status?.succeeded)}/${stringAt(item.spec?.completions)}` },
+      { key: "active", label: "Activos", getter: (item) => stringAt(item.status?.active) },
       { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
     ]
   },
@@ -144,6 +244,52 @@ const resourceConfigs: ResourceConfig[] = [
     ]
   },
   {
+    key: "persistentvolumeclaims",
+    label: "PVCs",
+    kubectlName: "persistentvolumeclaims",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "status", label: "Estado", getter: (item) => stringAt(item.status?.phase) },
+      { key: "volume", label: "Volumen", getter: (item) => stringAt(item.spec?.volumeName) },
+      { key: "capacity", label: "Capacidad", getter: (item) => stringAt((item.status as { capacity?: { storage?: string } })?.capacity?.storage) },
+      { key: "storageClass", label: "StorageClass", getter: (item) => stringAt(item.spec?.storageClassName) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "horizontalpodautoscalers",
+    label: "HPAs",
+    kubectlName: "horizontalpodautoscalers",
+    namespaced: true,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      {
+        key: "reference",
+        label: "Referencia",
+        getter: (item) => {
+          const ref = (item.spec as { scaleTargetRef?: { kind?: string; name?: string } })?.scaleTargetRef;
+          return ref?.name ? `${ref.kind}/${ref.name}` : "-";
+        }
+      },
+      { key: "min", label: "Min", getter: (item) => stringAt(item.spec?.minReplicas) },
+      { key: "max", label: "Max", getter: (item) => stringAt(item.spec?.maxReplicas) },
+      { key: "replicas", label: "Réplicas", getter: (item) => stringAt(item.status?.currentReplicas) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
+    key: "namespaces",
+    label: "Namespaces",
+    kubectlName: "namespaces",
+    namespaced: false,
+    columns: [
+      { key: "name", label: "Nombre", getter: nameOf },
+      { key: "status", label: "Estado", getter: (item) => stringAt(item.status?.phase) },
+      { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
+    ]
+  },
+  {
     key: "nodes",
     label: "Nodes",
     kubectlName: "nodes",
@@ -159,6 +305,108 @@ const resourceConfigs: ResourceConfig[] = [
 ];
 
 const configByKey = Object.fromEntries(resourceConfigs.map((config) => [config.key, config])) as Record<ResourceKey, ResourceConfig>;
+
+// Agrupacion de la barra lateral por categoria para no tener una lista plana larga.
+const RESOURCE_CATEGORIES: Array<{ label: string; keys: ResourceKey[] }> = [
+  { label: "Workloads", keys: ["pods", "deployments", "statefulsets", "daemonsets", "replicasets", "cronjobs", "jobs", "horizontalpodautoscalers"] },
+  { label: "Red", keys: ["services", "ingress"] },
+  { label: "Configuración", keys: ["configmaps", "secrets"] },
+  { label: "Almacenamiento", keys: ["persistentvolumeclaims"] },
+  { label: "Cluster", keys: ["namespaces", "nodes"] }
+];
+
+type LogsMode = "live" | "query";
+
+// Modo Live (-f): el log crece para siempre, asi que mantenemos un ring buffer.
+const MAX_LIVE_LINES = 5000;
+// Modo Consulta (historico): cargamos toda la ventana, con un tope de seguridad.
+const MAX_QUERY_LINES = 50000;
+// Ancho maximo del rango (Inicio -> Fin) permitido en la consulta historica.
+const MAX_RANGE_DAYS = 3;
+// Intervalo de agrupacion: en lugar de re-renderizar en cada chunk recibido,
+// acumulamos y volcamos como mucho cada LOG_FLUSH_MS milisegundos.
+const LOG_FLUSH_MS = 150;
+// Virtualizacion: alto fijo de cada fila (px) y filas extra fuera de viewport.
+const LOG_ROW_H = 24;
+const LOG_OVERSCAN = 12;
+
+// Timestamp que antepone `kubectl logs --timestamps` (RFC3339).
+const K8S_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s+/;
+
+// Epoch (ms) del timestamp inicial de la linea, o null si no lo trae.
+function lineEpoch(line: string): number | null {
+  const match = K8S_TS_RE.exec(line);
+  if (!match) return null;
+  const time = Date.parse(match[1]);
+  return Number.isNaN(time) ? null : time;
+}
+
+// Conserva solo las ultimas `max` lineas del texto recibido.
+function capLines(text: string, max: number) {
+  let newlines = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) newlines++;
+  }
+  if (newlines <= max) return text;
+  const lines = text.split("\n");
+  return lines.slice(lines.length - max).join("\n");
+}
+
+// Valor para <input type="datetime-local"> a partir de una fecha (hora local).
+function toLocalInputValue(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// Construye los argumentos de kubectl segun el modo y el rango elegido.
+// Devuelve tambien el epoch de corte final (kubectl no soporta "--until").
+function buildLogsArgs(
+  name: string,
+  opts: { mode: LogsMode; since: string; start: string; end: string }
+): { args: string[]; startEpoch: number | null; endEpoch: number | null; follow: boolean } {
+  const args = ["logs", "--timestamps"];
+  if (opts.mode === "live") {
+    if (opts.since) {
+      // Preset (1m, 5m, ...): seguimiento continuo en vivo.
+      args.push("-f", `--since=${opts.since}`, name);
+      return { args, startEpoch: null, endEpoch: null, follow: true };
+    }
+    // "Todo": volcado completo del log retenido, SIN -f, para fijarlo y poder buscar.
+    args.push(name);
+    return { args, startEpoch: null, endEpoch: null, follow: false };
+  }
+
+  // Consulta historica (sin -f). El limite de dias aplica al ANCHO del rango
+  // (Inicio -> Fin), no a que tan atras puede estar el Inicio; eso lo valida
+  // runLogsQuery antes de llamar aqui.
+  let startEpoch: number | null = null;
+  if (opts.start) {
+    const startMs = new Date(opts.start).getTime();
+    if (!Number.isNaN(startMs)) {
+      startEpoch = startMs;
+      args.push(`--since-time=${new Date(startMs).toISOString()}`);
+    }
+  } else if (opts.since) {
+    args.push(`--since=${opts.since}`);
+  }
+  args.push(`--tail=${MAX_QUERY_LINES}`, name);
+  const endMs = opts.end ? new Date(opts.end).getTime() : NaN;
+  return { args, startEpoch, endEpoch: Number.isNaN(endMs) ? null : endMs, follow: false };
+}
+
+// Reconstruye el comando kubectl tal como lo muestra el proceso principal
+// (mismo formato que electron/main.ts), para poder mostrarlo de inmediato en la
+// barra de sesion sin esperar a que termine el stream (ej. `logs -f`).
+function formatKubectlCommand(args: string[], context?: string, namespace?: string): string {
+  const hasFlag = (flag: string) => args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  const full: string[] = [];
+  if (context && !hasFlag("--context")) full.push("--context", context);
+  if (namespace && !hasFlag("-n") && !hasFlag("--namespace")) full.push("-n", namespace);
+  full.push(...args);
+  return ["kubectl", ...full]
+    .map((value) => (/^[A-Za-z0-9_./:=@-]+$/.test(value) ? value : JSON.stringify(value)))
+    .join(" ");
+}
 
 export function App() {
   if (!window.kubeui) {
@@ -176,15 +424,66 @@ export function App() {
   const [namespaceDraft, setNamespaceDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [logsSince, setLogsSince] = useState("");
+  const [logsSince, setLogsSince] = useState("5m");
+  const [logsMode, setLogsMode] = useState<LogsMode>("live");
+  const [logsStart, setLogsStart] = useState("");
+  const [logsEnd, setLogsEnd] = useState("");
+  const [logsNotice, setLogsNotice] = useState("");
+  // Vista ampliada de logs: oculta tabstrip, sidebar, barra de sesion y statusbar.
+  const [logsExpanded, setLogsExpanded] = useState(false);
+  // Vista a la que regresar al cerrar la configuracion (kubeconfig).
+  const [settingsReturn, setSettingsReturn] = useState<ViewMode>("table");
+  // Dialogos in-app (reemplazan a window.confirm/prompt, que bloquean el
+  // renderer de Electron y dejan la ventana "congelada").
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; resolve: (value: boolean) => void } | null>(null);
+  const [inputDialog, setInputDialog] = useState<{ message: string; value: string; resolve: (value: string | null) => void } | null>(null);
+
+  const requestConfirm = useCallback(
+    (message: string) => new Promise<boolean>((resolve) => setConfirmDialog({ message, resolve })),
+    []
+  );
+  const requestInput = useCallback(
+    (message: string, initial: string) => new Promise<string | null>((resolve) => setInputDialog({ message, value: initial, resolve })),
+    []
+  );
   const stopStreamRef = useRef<(() => void) | null>(null);
+  // Token incremental para descartar cargas de lista obsoletas (cambio rapido de recurso).
+  const loadTokenRef = useRef(0);
+  // Token incremental para acciones puntuales (describe / yaml / editar / delete...).
+  // Permite "Interrumpir": al incrementarlo, el resultado en vuelo se descarta.
+  const actionTokenRef = useRef(0);
+  // Buffer y temporizador para agrupar los chunks de logs antes de pintarlos.
+  const logBufferRef = useRef<string>("");
+  const logFlushTimerRef = useRef<number | null>(null);
+  // Ref siempre actualizada con la pestana activa (para usarla dentro de
+  // callbacks memorizados como stopStream sin recrearlos en cada render).
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
 
   const stopStream = useCallback(() => {
+    if (logFlushTimerRef.current != null) {
+      window.clearTimeout(logFlushTimerRef.current);
+      logFlushTimerRef.current = null;
+    }
+    logBufferRef.current = "";
+    // Solo habia un stream real si teniamos una funcion de corte registrada.
+    const hadStream = Boolean(stopStreamRef.current);
     if (stopStreamRef.current) {
       stopStreamRef.current();
       stopStreamRef.current = null;
     }
     setStreaming(false);
+    // Al cortar el stream manualmente, onEnd no se dispara (el listener se
+    // remueve antes de detenerlo), asi que liberamos el "loading" de la pestana
+    // que estaba transmitiendo; de lo contrario queda bloqueada (no se puede
+    // refrescar la lista al volver). OJO: solo lo hacemos si REALMENTE habia un
+    // stream; de lo contrario este metodo (que tambien se llama al cambiar de
+    // vista) borraria el "loading" de una accion puntual recien lanzada
+    // (describe / yaml / editar) y mostraria "Sin salida" en vez de "Cargando".
+    if (hadStream) {
+      const streamingTabId = activeTabIdRef.current;
+      setTabs((current) => current.map((tab) => (tab.id === streamingTabId && tab.loading ? { ...tab, loading: false } : tab)));
+    }
   }, []);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -268,16 +567,37 @@ export function App() {
   const loadResources = useCallback(
     async (tab: TabSession) => {
       if (!tab.context) return;
+      // Token de carga: si se dispara otra consulta (cambio de recurso /
+      // namespace / contexto) mientras esta sigue en vuelo, descartamos el
+      // resultado tardio para no "pegar" datos del recurso anterior.
+      const token = ++loadTokenRef.current;
       const config = configByKey[tab.resource];
-      updateTab(tab.id, { loading: true, output: "", outputTitle: "" });
+      // Firma del destino: el resultado solo se aplica si la pestana sigue en
+      // el mismo recurso/contexto/namespace. Esto cubre el caso en que el
+      // usuario vuelve a un kind que ya tenia datos en cache (no se dispara una
+      // nueva carga, asi que el token no cambia) mientras la consulta anterior
+      // todavia estaba en vuelo.
+      const targetResource = tab.resource;
+      const targetContext = tab.context;
+      const targetNamespace = config.namespaced ? tab.namespace : undefined;
+      const stillTarget = (candidate: TabSession) =>
+        candidate.resource === targetResource &&
+        candidate.context === targetContext &&
+        (!config.namespaced || candidate.namespace === targetNamespace);
+      const applyIfCurrent = (patch: Partial<TabSession>) =>
+        setTabs((current) =>
+          current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
+        );
+      updateTab(tab.id, { loading: true, output: "", outputTitle: "", rows: [], selectedName: "" });
       const result = await window.kubeui.runKubectl({
         args: ["get", config.kubectlName, "-o", "json"],
         kubeconfigPaths,
         context: tab.context,
         namespace: config.namespaced ? tab.namespace : undefined
       });
+      if (loadTokenRef.current !== token) return;
       if (!result.ok) {
-        updateTab(tab.id, { loading: false, outputTitle: "Error", output: result.stderr, lastCommand: result.command, rows: [] });
+        applyIfCurrent({ loading: false, outputTitle: "Error", output: result.stderr, lastCommand: result.command, rows: [] });
         return;
       }
       let items: KubeItem[] = [];
@@ -286,7 +606,7 @@ export function App() {
       } catch {
         items = [];
       }
-      updateTab(tab.id, { rows: items, selectedName: "", loading: false, lastCommand: result.command });
+      applyIfCurrent({ rows: items, selectedName: "", loading: false, lastCommand: result.command });
     },
     [kubeconfigPaths]
   );
@@ -315,10 +635,32 @@ export function App() {
   // Detener cualquier streaming activo al cerrar la app.
   useEffect(() => () => stopStream(), [stopStream]);
 
+  // Detener el streaming al cambiar de pestaña para no dejar procesos
+  // `kubectl logs -f` / exec colgados consumiendo recursos en segundo plano.
+  useEffect(() => {
+    stopStream();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
+
+  // Detener el streaming al salir de las vistas que lo usan (logs / terminal).
+  useEffect(() => {
+    if (viewMode !== "logs" && viewMode !== "terminal") stopStream();
+  }, [viewMode, stopStream]);
+
+  // Al salir de la vista de logs, salir tambien del modo ampliado.
+  useEffect(() => {
+    if (viewMode !== "logs") setLogsExpanded(false);
+  }, [viewMode]);
+
   // Carga automatica de recursos al cambiar de pestana, contexto, namespace o tipo de recurso.
+  // Si el kind ya tiene datos en cache (el usuario ya lo vio antes) no recarga automaticamente;
+  // el usuario puede pulsar Refrescar explicitamente.
   useEffect(() => {
     if (!activeTab || !activeTab.context) return;
     if (viewMode !== "table") return;
+    // Solo cargar si no hay datos. Si el cache ya los trajo al cambiar de kind,
+    // o si la tab ya tenia filas, no hace falta una nueva consulta.
+    if (activeTab.rows.length > 0) return;
     loadResources(activeTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.id, activeTab?.context, activeTab?.namespace, activeTab?.resource, viewMode, loadResources]);
@@ -349,48 +691,124 @@ export function App() {
     await loadResources(activeTab);
   };
 
+  // Interrumpe la accion en curso: descarta el resultado en vuelo (via token),
+  // libera el "loading" y vuelve a la lista para desbloquear las acciones.
+  const interruptAction = () => {
+    actionTokenRef.current++;
+    stopStream();
+    updateActiveTab({ loading: false });
+    setViewMode("table");
+  };
+
   const showOutput = async (mode: ViewMode, args: string[], title: string) => {
     if (!activeTab) return;
     stopStream();
-    updateActiveTab({ loading: true });
+    const token = ++actionTokenRef.current;
+    const tabId = activeTab.id;
+    // Cambiamos de vista de inmediato y mostramos el estado de carga: el usuario
+    // ve que el comando se lanzo y puede interrumpirlo mientras espera.
+    updateActiveTab({ loading: true, outputTitle: title, output: "" });
+    setViewMode(mode);
     const result = await run(activeTab, args);
-    updateActiveTab({
+    if (actionTokenRef.current !== token) return; // interrumpido o reemplazado
+    updateTab(tabId, {
       loading: false,
       outputTitle: title,
       output: result.ok ? result.stdout : result.stderr,
       lastCommand: result.command
     });
-    setViewMode(mode);
   };
 
-  // Logs en tiempo real: usamos -f y vamos anexando cada linea conforme llega.
-  const streamLogs = (since = logsSince) => {
+  // Carga de logs. Modo "live" usa -f (stream continuo, ring buffer);
+  // modo "query" trae una ventana historica acotada y la corta en el cliente.
+  const runLogs = (
+    override?: Partial<{ mode: LogsMode; since: string; start: string; end: string }>
+  ) => {
     if (!activeTab || !activeTab.selectedName) return;
     stopStream();
+    const mode = override?.mode ?? logsMode;
+    const since = override?.since ?? logsSince;
+    const start = override?.start ?? logsStart;
+    const end = override?.end ?? logsEnd;
     const tabId = activeTab.id;
     const name = activeTab.selectedName;
-    updateActiveTab({ loading: true, outputTitle: `Logs ${name}`, output: "" });
+    const { args, startEpoch, endEpoch, follow } = buildLogsArgs(name, { mode, since, start, end });
+    // Solo el seguimiento en vivo (preset) usa el ring buffer corto; los
+    // volcados completos (Todo / historico) conservan mas para poder buscar.
+    const cap = follow ? MAX_LIVE_LINES : MAX_QUERY_LINES;
+    const inverted = startEpoch != null && endEpoch != null && endEpoch < startEpoch;
+
+    setLogsNotice("");
+    updateActiveTab({ loading: true, outputTitle: `Logs ${name}`, output: "", lastCommand: formatKubectlCommand(args, activeTab.context, activeTab.namespace) });
     setViewMode("logs");
     setStreaming(true);
+    logBufferRef.current = "";
+    // Acumulador local del texto recibido en esta carga (para calcular el
+    // resultado final sin depender del estado asincrono de setTabs).
+    let accum = "";
+
+    const flush = () => {
+      const pending = logBufferRef.current;
+      logBufferRef.current = "";
+      if (!pending) return;
+      accum = capLines(accum + pending, cap);
+      setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, output: accum } : tab)));
+    };
+
     stopStreamRef.current = window.kubeui.streamKubectl(
       {
-        args: ["logs", "-f", ...(since ? [`--since=${since}`] : []), name],
+        args,
         kubeconfigPaths,
         context: activeTab.context,
         namespace: activeTab.namespace
       },
       {
         onData: (chunk) => {
-          setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, output: tab.output + chunk } : tab)));
+          // Acumulamos en un buffer y volcamos como mucho cada LOG_FLUSH_MS,
+          // en vez de re-renderizar en cada chunk recibido.
+          logBufferRef.current += chunk;
+          if (logFlushTimerRef.current == null) {
+            logFlushTimerRef.current = window.setTimeout(() => {
+              logFlushTimerRef.current = null;
+              flush();
+            }, LOG_FLUSH_MS);
+          }
         },
         onEnd: ({ command, error }) => {
+          if (logFlushTimerRef.current != null) {
+            window.clearTimeout(logFlushTimerRef.current);
+            logFlushTimerRef.current = null;
+          }
+          flush();
+          let merged = accum;
+          // kubectl no tiene "--until": recortamos el fin del rango aqui.
+          if (endEpoch != null) {
+            merged = merged
+              .split("\n")
+              .filter((ln) => {
+                const epoch = lineEpoch(ln);
+                return epoch == null || epoch <= endEpoch;
+              })
+              .join("\n");
+          }
+          const finalOut = error ? (merged ? `${merged}\n${error}` : error) : merged;
           setTabs((current) =>
             current.map((tab) =>
               tab.id === tabId
-                ? { ...tab, loading: false, lastCommand: command || tab.lastCommand, output: error ? `${tab.output}\n${error}` : tab.output }
+                ? { ...tab, loading: false, lastCommand: command || tab.lastCommand, output: finalOut }
                 : tab
             )
           );
+
+          if (!error && mode === "query") {
+            if (inverted) {
+              setLogsNotice("El Fin es anterior al Inicio: no hay registros en ese rango.");
+            } else if (merged.trim() === "") {
+              setLogsNotice(
+                "Sin registros en el rango. kubectl solo ve lo que el nodo aun retiene (los logs rotan)."
+              );
+            }
+          }
           setStreaming(false);
           stopStreamRef.current = null;
         }
@@ -398,10 +816,48 @@ export function App() {
     );
   };
 
-  // Cambia el rango --since y reinicia el seguimiento de logs.
+  // Cambia el preset --since y recarga con el modo actual.
   const changeLogsSince = (value: string) => {
     setLogsSince(value);
-    if (activeTab?.selectedName) streamLogs(value);
+    if (activeTab?.selectedName) runLogs({ since: value });
+  };
+
+  // Cambia entre modo Live e historico. Live recarga al instante; el historico
+  // prepara un rango por defecto y espera a que el usuario pulse "Consultar".
+  const changeLogsMode = (mode: LogsMode) => {
+    setLogsMode(mode);
+    if (mode === "live") {
+      if (activeTab?.selectedName) runLogs({ mode: "live" });
+      return;
+    }
+    // Al pasar a Historico cargamos de inmediato el rango por defecto
+    // (ultimos 30 min) en vez de mantener los logs del modo En vivo.
+    const start = logsStart || toLocalInputValue(new Date(Date.now() - 1_800_000));
+    const end = logsEnd || toLocalInputValue(new Date());
+    setLogsStart(start);
+    setLogsEnd(end);
+    if (activeTab?.selectedName) runLogs({ mode: "query", start, end });
+  };
+
+  // Ejecuta la consulta historica con el rango personalizado actual.
+  const runLogsQuery = () => {
+    setLogsMode("query");
+    // El limite aplica al ANCHO del rango (Inicio -> Fin), no a la antiguedad.
+    if (logsStart && logsEnd) {
+      const startMs = new Date(logsStart).getTime();
+      const endMs = new Date(logsEnd).getTime();
+      if (!Number.isNaN(startMs) && !Number.isNaN(endMs)) {
+        if (endMs < startMs) {
+          setLogsNotice("El Fin es anterior al Inicio.");
+          return;
+        }
+        if (endMs - startMs > MAX_RANGE_DAYS * 86_400_000) {
+          setLogsNotice(`El rango entre Inicio y Fin no puede superar ${MAX_RANGE_DAYS} días.`);
+          return;
+        }
+      }
+    }
+    runLogs({ mode: "query" });
   };
 
   const selectedName = activeTab?.selectedName ?? "";
@@ -437,27 +893,73 @@ export function App() {
 
   const deleteResource = async () => {
     if (!activeTab || !selectedName) return;
-    if (!confirm(`Eliminar ${selectedConfig.label}: ${selectedName}?`)) return;
+    if (!(await requestConfirm(`Eliminar ${selectedConfig.label}: ${selectedName}?`))) return;
     await showOutput("details", ["delete", selectedConfig.kubectlName, selectedName], `Eliminar ${selectedName}`);
     await refreshResources();
   };
 
   const restartResource = async () => {
     if (!activeTab || !selectedName) return;
-    const args =
-      activeTab.resource === "pods"
-        ? ["delete", "pod", selectedName]
-        : ["rollout", "restart", "deployment", selectedName];
-    if (!confirm(`Reiniciar ${selectedName}?`)) return;
+    const kind = activeTab.resource;
+    let args: string[];
+    if (kind === "pods") {
+      args = ["delete", "pod", selectedName];
+    } else if (kind === "deployments" || kind === "statefulsets" || kind === "daemonsets") {
+      args = ["rollout", "restart", selectedConfig.kubectlName, selectedName];
+    } else {
+      return;
+    }
+    if (!(await requestConfirm(`Reiniciar ${selectedName}?`))) return;
     await showOutput("details", args, `Reiniciar ${selectedName}`);
     await refreshResources();
   };
 
   const scaleDeployment = async () => {
-    if (!activeTab || activeTab.resource !== "deployments" || !selectedName) return;
-    const replicas = prompt("Réplicas", "1");
+    if (!activeTab || !selectedName) return;
+    if (!["deployments", "statefulsets", "replicasets"].includes(activeTab.resource)) return;
+    const replicas = await requestInput("Réplicas", "1");
     if (!replicas || !/^\d+$/.test(replicas)) return;
-    await showOutput("details", ["scale", "deployment", selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
+    await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
+    await refreshResources();
+  };
+
+  // "Editar": traemos el YAML del recurso a un borrador editable y abrimos el
+  // panel. Al guardar se hace `kubectl replace` (equivalente no interactivo de
+  // `kubectl edit`: actualiza el objeto vivo directamente).
+  const editResource = async () => {
+    if (!activeTab || !selectedName) return;
+    stopStream();
+    const token = ++actionTokenRef.current;
+    const tabId = activeTab.id;
+    // Abrimos el panel de edicion de inmediato en estado de carga (mientras se
+    // trae el YAML del recurso). El usuario puede interrumpir si demora.
+    updateActiveTab({ loading: true, yamlDraft: "", yamlEditMode: true, outputTitle: `Editar ${selectedName}` });
+    setViewMode("apply");
+    const result = await run(activeTab, ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"]);
+    if (actionTokenRef.current !== token) return; // interrumpido o reemplazado
+    if (!result.ok) {
+      updateTab(tabId, { loading: false, viewMode: "details", outputTitle: "Error", output: result.stderr, lastCommand: result.command });
+      return;
+    }
+    updateTab(tabId, { loading: false, yamlDraft: result.stdout, yamlEditMode: true, lastCommand: result.command });
+  };
+
+  const triggerCronJob = async () => {
+    if (!activeTab || activeTab.resource !== "cronjobs" || !selectedName) return;
+    const jobName = `${selectedName}-manual-${Date.now().toString().slice(-6)}`;
+    if (!(await requestConfirm(`Ejecutar ahora el CronJob ${selectedName}?`))) return;
+    await showOutput("details", ["create", "job", jobName, `--from=cronjob/${selectedName}`], `Ejecutar ${selectedName}`);
+  };
+
+  const toggleCronSuspend = async () => {
+    if (!activeTab || activeTab.resource !== "cronjobs" || !selectedName) return;
+    const row = activeTab.rows.find((item) => nameOf(item) === selectedName);
+    const next = !Boolean((row?.spec as { suspend?: boolean })?.suspend);
+    await showOutput(
+      "details",
+      ["patch", "cronjob", selectedName, "-p", JSON.stringify({ spec: { suspend: next } })],
+      `${next ? "Suspender" : "Reanudar"} ${selectedName}`
+    );
     await refreshResources();
   };
 
@@ -496,22 +998,28 @@ export function App() {
 
   const pickYaml = async () => {
     const file = await window.kubeui.pickYamlFile();
-    if (file) updateActiveTab({ yamlDraft: file.content });
+    // Cargar un archivo es un Apply libre, no la edicion de un recurso vivo.
+    if (file) updateActiveTab({ yamlDraft: file.content, yamlEditMode: false });
   };
 
   const applyYaml = async () => {
     if (!activeTab || !activeTab.yamlDraft.trim()) return;
-    if (!confirm("Aplicar YAML en el contexto seleccionado?")) return;
+    const editMode = activeTab.yamlEditMode;
+    const confirmMessage = editMode
+      ? "Guardar cambios del recurso con kubectl replace?"
+      : "Aplicar YAML en el contexto seleccionado?";
+    if (!(await requestConfirm(confirmMessage))) return;
     updateActiveTab({ loading: true });
-    const result = await window.kubeui.applyYaml({
+    const payload = {
       yaml: activeTab.yamlDraft,
       kubeconfigPaths,
       context: activeTab.context,
       namespace: activeTab.namespace
-    });
+    };
+    const result = editMode ? await window.kubeui.replaceYaml(payload) : await window.kubeui.applyYaml(payload);
     updateActiveTab({
       loading: false,
-      outputTitle: "Apply YAML",
+      outputTitle: editMode ? "Editar recurso" : "Apply YAML",
       output: result.ok ? result.stdout : result.stderr,
       lastCommand: result.command
     });
@@ -531,7 +1039,7 @@ export function App() {
   const statusOk = kubectlStatus?.ok;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${logsExpanded ? "logs-expanded" : ""}`}>
       <div className="tabstrip">
         <button
           className="sidebar-toggle"
@@ -570,22 +1078,68 @@ export function App() {
         </div>
       </div>
 
-      <main className={`workspace ${sidebarOpen ? "" : "collapsed"}`}>
-        {sidebarOpen && (
+      <main className={`workspace ${sidebarOpen && !logsExpanded ? "" : "collapsed"}`}>
+        {sidebarOpen && !logsExpanded && (
           <aside className="sidebar">
             <div className="resource-list">
-              {resourceConfigs.map((config) => (
-                <button
-                  key={config.key}
-                  className={activeTab?.resource === config.key && viewMode === "table" ? "active" : ""}
-                  onClick={() => {
-                    stopStream();
-                    updateActiveTab({ resource: config.key, rows: [], selectedName: "" });
-                    setViewMode("table");
-                  }}
-                >
-                  {config.label}
-                </button>
+              {RESOURCE_CATEGORIES.map((category) => (
+                <div key={category.label} className="resource-group">
+                  <span className="resource-group-title">{category.label}</span>
+                  {category.keys.map((key) => {
+                    const config = configByKey[key];
+                    return (
+                      <button
+                        key={config.key}
+                        className={activeTab?.resource === config.key && (viewMode === "table" || viewMode === "details" || viewMode === "yaml" || viewMode === "apply") ? "active" : ""}
+                        onClick={() => {
+                          stopStream();
+                          if (!activeTab) return;
+                          if (activeTab.resource === config.key) {
+                            // Mismo kind: si estamos en una accion, volver a la tabla.
+                            setViewMode("table");
+                            return;
+                          }
+                          // Guardar snapshot del kind actual y restaurar el del nuevo.
+                          // La vista de edicion ("apply") es transitoria: su
+                          // contenido (yamlDraft) no se cachea por kind, asi que
+                          // no la persistimos (se guardaria como "table") para
+                          // evitar que reaparezca pegada al volver a este kind.
+                          const snapshot: ResourceSnapshot = {
+                            rows: activeTab.rows,
+                            selectedName: activeTab.selectedName,
+                            viewMode: activeTab.viewMode === "apply" ? "table" : activeTab.viewMode,
+                            outputTitle: activeTab.outputTitle,
+                            output: activeTab.output,
+                            lastCommand: activeTab.lastCommand
+                          };
+                          const cached = activeTab.resourceCache[config.key];
+                          const restoredViewMode = cached?.viewMode && cached.viewMode !== "apply" ? cached.viewMode : "table";
+                          setTabs((current) => current.map((tab) => {
+                            if (tab.id !== activeTab.id) return tab;
+                            return {
+                              ...tab,
+                              resource: config.key,
+                              resourceCache: { ...tab.resourceCache, [activeTab.resource]: snapshot },
+                              rows: cached?.rows ?? [],
+                              selectedName: cached?.selectedName ?? "",
+                              viewMode: restoredViewMode,
+                              outputTitle: cached?.outputTitle ?? "",
+                              output: cached?.output ?? "",
+                              lastCommand: cached?.lastCommand ?? "",
+                              // Limpiar el borrador de edicion para que no se
+                              // arrastre entre kinds.
+                              yamlDraft: "",
+                              yamlEditMode: false,
+                              loading: false
+                            };
+                          }));
+                        }}
+                      >
+                        {config.label}
+                      </button>
+                    );
+                  })}
+                </div>
               ))}
             </div>
             <div className="side-actions">
@@ -593,7 +1147,7 @@ export function App() {
                 <SquareTerminal size={16} />
                 Terminal
               </button>
-              <button className={viewMode === "apply" ? "active" : ""} onClick={() => setViewMode("apply")}>
+              <button className={viewMode === "apply" ? "active" : ""} onClick={() => { updateActiveTab({ yamlEditMode: false }); setViewMode("apply"); }}>
                 <FileCode2 size={16} />
                 Apply YAML
               </button>
@@ -603,7 +1157,7 @@ export function App() {
 
         <section className="content">
           {globalMessage && <div className="banner">{globalMessage}</div>}
-          {activeTab && viewMode !== "settings" && (
+          {activeTab && viewMode !== "settings" && !logsExpanded && (
             <div className="session-bar">
               <label>
                 Contexto
@@ -672,6 +1226,7 @@ export function App() {
               onAdd={addKubeconfigs}
               onRemove={removeKubeconfig}
               onRefresh={refreshContexts}
+              onBack={() => setViewMode(settingsReturn)}
             />
           )}
 
@@ -683,15 +1238,24 @@ export function App() {
               onSelect={(name) => updateActiveTab({ selectedName: name })}
               onDescribe={() => selectedName && showOutput("details", ["describe", selectedConfig.kubectlName, selectedName], `Describe ${selectedName}`)}
               onYaml={() => selectedName && showOutput("yaml", ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], `YAML ${selectedName}`)}
-              onLogs={() => selectedName && streamLogs()}
+              onLogs={() => selectedName && runLogs()}
+              onEdit={editResource}
               onDelete={deleteResource}
               onRestart={restartResource}
               onScale={scaleDeployment}
+              onTrigger={triggerCronJob}
+              onSuspend={toggleCronSuspend}
             />
           )}
 
           {activeTab && (viewMode === "details" || viewMode === "yaml") && (
-            <OutputPanel title={activeTab.outputTitle} output={activeTab.output} />
+            <OutputPanel
+              title={activeTab.outputTitle}
+              output={activeTab.output}
+              loading={activeTab.loading}
+              onInterrupt={interruptAction}
+              onBack={() => setViewMode("table")}
+            />
           )}
 
           {activeTab && viewMode === "logs" && (
@@ -699,13 +1263,24 @@ export function App() {
               title={activeTab.outputTitle}
               output={activeTab.output}
               streaming={streaming}
+              following={logsMode === "live" && !!logsSince}
+              mode={logsMode}
+              onModeChange={changeLogsMode}
               since={logsSince}
               onSinceChange={changeLogsSince}
+              start={logsStart}
+              end={logsEnd}
+              onStartChange={setLogsStart}
+              onEndChange={setLogsEnd}
+              onQuery={runLogsQuery}
+              notice={logsNotice}
+              expanded={logsExpanded}
+              onToggleExpand={() => setLogsExpanded((value) => !value)}
               onBack={() => {
                 stopStream();
                 setViewMode("table");
               }}
-              onResume={() => streamLogs()}
+              onResume={() => runLogs()}
               onStop={stopStream}
             />
           )}
@@ -726,30 +1301,126 @@ export function App() {
             <ApplyPanel
               yaml={activeTab.yamlDraft}
               loading={activeTab.loading}
+              editMode={activeTab.yamlEditMode}
               onChange={(yamlDraft) => updateActiveTab({ yamlDraft })}
               onPick={pickYaml}
               onApply={applyYaml}
+              onInterrupt={interruptAction}
+              onBack={() => setViewMode("table")}
             />
           )}
         </section>
       </main>
 
-      <footer className="statusbar">
-        <div className="brand">
-          <Boxes size={20} />
-          <div>
-            <strong>kubeui</strong>
-            <span>{kubeconfigPaths.length ? `${kubeconfigPaths.length} kubeconfig` : "sin kubeconfig"}</span>
+      {!logsExpanded && (
+        <footer className="statusbar">
+          <div className="brand">
+            <Boxes size={20} />
+            <div>
+              <strong>kubeui</strong>
+              <span>{kubeconfigPaths.length ? `${kubeconfigPaths.length} kubeconfig` : "sin kubeconfig"}</span>
+            </div>
+          </div>
+          <div className={`status-pill ${statusOk ? "ok" : "bad"}`}>
+            {statusOk ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+            <span>{statusOk ? "kubectl listo" : "kubectl no disponible"}</span>
+          </div>
+          <button
+            className="icon-button"
+            title="Configurar kubeconfig"
+            onClick={() => {
+              // Recordar la vista actual para poder regresar al mismo kind/accion.
+              if (viewMode !== "settings") setSettingsReturn(viewMode);
+              setViewMode("settings");
+            }}
+          >
+            <Settings size={18} />
+          </button>
+        </footer>
+      )}
+
+      {confirmDialog && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            confirmDialog.resolve(false);
+            setConfirmDialog(null);
+          }}
+        >
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <p className="modal-message">{confirmDialog.message}</p>
+            <div className="modal-actions">
+              <button
+                className="toolbar-button"
+                onClick={() => {
+                  confirmDialog.resolve(false);
+                  setConfirmDialog(null);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="toolbar-button primary"
+                onClick={() => {
+                  confirmDialog.resolve(true);
+                  setConfirmDialog(null);
+                }}
+              >
+                Aceptar
+              </button>
+            </div>
           </div>
         </div>
-        <div className={`status-pill ${statusOk ? "ok" : "bad"}`}>
-          {statusOk ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-          <span>{statusOk ? "kubectl listo" : "kubectl no disponible"}</span>
+      )}
+
+      {inputDialog && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            inputDialog.resolve(null);
+            setInputDialog(null);
+          }}
+        >
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <p className="modal-message">{inputDialog.message}</p>
+            <input
+              className="modal-input"
+              autoFocus
+              value={inputDialog.value}
+              onChange={(event) => setInputDialog((state) => (state ? { ...state, value: event.target.value } : state))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  inputDialog.resolve(inputDialog.value);
+                  setInputDialog(null);
+                } else if (event.key === "Escape") {
+                  inputDialog.resolve(null);
+                  setInputDialog(null);
+                }
+              }}
+            />
+            <div className="modal-actions">
+              <button
+                className="toolbar-button"
+                onClick={() => {
+                  inputDialog.resolve(null);
+                  setInputDialog(null);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="toolbar-button primary"
+                onClick={() => {
+                  inputDialog.resolve(inputDialog.value);
+                  setInputDialog(null);
+                }}
+              >
+                Aceptar
+              </button>
+            </div>
+          </div>
         </div>
-        <button className="icon-button" title="Configurar kubeconfig" onClick={() => setViewMode("settings")}>
-          <Settings size={18} />
-        </button>
-      </footer>
+      )}
     </div>
   );
 }
@@ -773,19 +1444,28 @@ function SettingsView({
   settings,
   onAdd,
   onRemove,
-  onRefresh
+  onRefresh,
+  onBack
 }: {
   settings: AppSettings;
   onAdd: () => void;
   onRemove: (path: string) => void;
   onRefresh: () => void;
+  onBack?: () => void;
 }) {
   return (
     <div className="settings-view">
       <div className="panel-title">
-        <div>
-          <h1>Kubeconfig</h1>
-          <p>{settings.kubeconfigPaths.length ? "Archivos registrados" : "Sin archivos registrados"}</p>
+        <div className="panel-title-main">
+          {onBack && (
+            <button className="icon-button" title="Regresar" onClick={onBack}>
+              <ArrowLeft size={18} />
+            </button>
+          )}
+          <div>
+            <h1>Kubeconfig</h1>
+            <p>{settings.kubeconfigPaths.length ? "Archivos registrados" : "Sin archivos registrados"}</p>
+          </div>
         </div>
         <div className="button-row">
           <button className="toolbar-button" onClick={onAdd}>
@@ -826,9 +1506,12 @@ function ResourceTable({
   onDescribe,
   onYaml,
   onLogs,
+  onEdit,
   onDelete,
   onRestart,
-  onScale
+  onScale,
+  onTrigger,
+  onSuspend
 }: {
   tab: TabSession;
   config: ResourceConfig;
@@ -837,11 +1520,17 @@ function ResourceTable({
   onDescribe: () => void;
   onYaml: () => void;
   onLogs: () => void;
+  onEdit: () => void;
   onDelete: () => void;
   onRestart: () => void;
   onScale: () => void;
+  onTrigger: () => void;
+  onSuspend: () => void;
 }) {
   const selected = Boolean(tab.selectedName);
+  const busy = tab.loading;
+  const selectedRow = tab.rows.find((item) => nameOf(item) === tab.selectedName);
+  const cronSuspended = Boolean((selectedRow?.spec as { suspend?: boolean })?.suspend);
   const [filter, setFilter] = useState("");
   const needle = filter.trim().toLowerCase();
   const filteredRows = useMemo(() => {
@@ -867,37 +1556,55 @@ function ResourceTable({
           <p>{needle ? `${filteredRows.length} de ${tab.rows.length} recursos` : `${tab.rows.length} recursos`}</p>
         </div>
         <div className="button-row">
-          <button className="toolbar-button" onClick={onRefresh} disabled={tab.loading}>
+          <button className="toolbar-button" onClick={onRefresh} disabled={busy}>
             <RefreshCw size={16} />
             Refrescar
           </button>
-          <button className="toolbar-button" onClick={onDescribe} disabled={!selected}>
+          <button className="toolbar-button" onClick={onDescribe} disabled={!selected || busy}>
             <ScrollText size={16} />
             Describe
           </button>
-          <button className="toolbar-button" onClick={onYaml} disabled={!selected}>
+          <button className="toolbar-button" onClick={onYaml} disabled={!selected || busy}>
             <FileCode2 size={16} />
             YAML
           </button>
           {config.key === "pods" && (
-            <button className="toolbar-button" onClick={onLogs} disabled={!selected}>
+            <button className="toolbar-button" onClick={onLogs} disabled={!selected || busy}>
               <SquareTerminal size={16} />
               Logs
             </button>
           )}
-          {(config.key === "pods" || config.key === "deployments") && (
-            <button className="toolbar-button" onClick={onRestart} disabled={!selected}>
+          {config.key === "cronjobs" && (
+            <button className="toolbar-button" onClick={onTrigger} disabled={!selected || busy}>
+              <Play size={16} />
+              Ejecutar
+            </button>
+          )}
+          {config.key === "cronjobs" && (
+            <button className="toolbar-button" onClick={onSuspend} disabled={!selected || busy}>
+              <Pause size={16} />
+              {cronSuspended ? "Reanudar" : "Suspender"}
+            </button>
+          )}
+          {(config.key === "pods" || config.key === "deployments" || config.key === "statefulsets" || config.key === "daemonsets") && (
+            <button className="toolbar-button" onClick={onRestart} disabled={!selected || busy}>
               <RotateCcw size={16} />
               Reiniciar
             </button>
           )}
-          {config.key === "deployments" && (
-            <button className="toolbar-button" onClick={onScale} disabled={!selected}>
+          {(config.key === "deployments" || config.key === "statefulsets" || config.key === "replicasets") && (
+            <button className="toolbar-button" onClick={onScale} disabled={!selected || busy}>
               <Scale3D size={16} />
               Escalar
             </button>
           )}
-          <button className="toolbar-button danger" onClick={onDelete} disabled={!selected}>
+          {config.editable !== false && (
+            <button className="toolbar-button" onClick={onEdit} disabled={!selected || busy}>
+              <Pencil size={16} />
+              Editar
+            </button>
+          )}
+          <button className="toolbar-button danger" onClick={onDelete} disabled={!selected || busy}>
             <Trash2 size={16} />
             Eliminar
           </button>
@@ -951,19 +1658,55 @@ function ResourceTable({
   );
 }
 
-function OutputPanel({ title, output, streaming, onStop }: { title: string; output: string; streaming?: boolean; onStop?: () => void }) {
+function OutputPanel({
+  title,
+  output,
+  streaming,
+  loading,
+  onStop,
+  onInterrupt,
+  onBack
+}: {
+  title: string;
+  output: string;
+  streaming?: boolean;
+  loading?: boolean;
+  onStop?: () => void;
+  onInterrupt?: () => void;
+  onBack?: () => void;
+}) {
   return (
     <div className="output-panel">
       <div className="panel-title">
-        <h1>{title || "Salida"}</h1>
-        {streaming && onStop && (
+        <div className="panel-title-main">
+          {onBack && !loading && (
+            <button className="icon-button" title="Volver a la lista" onClick={onBack}>
+              <ArrowLeft size={18} />
+            </button>
+          )}
+          <h1>{title || "Salida"}</h1>
+        </div>
+        {loading && onInterrupt && (
+          <button className="toolbar-button danger" onClick={onInterrupt}>
+            <Square size={16} />
+            Interrumpir
+          </button>
+        )}
+        {!loading && streaming && onStop && (
           <button className="toolbar-button danger" onClick={onStop}>
             <Square size={16} />
             Detener
           </button>
         )}
       </div>
-      <pre>{output || (streaming ? "Esperando salida..." : "Sin salida")}</pre>
+      {loading ? (
+        <div className="loading-state">
+          <RefreshCw size={20} className="spin" />
+          <span>Ejecutando comando, esperando resultado...</span>
+        </div>
+      ) : (
+        <pre>{output || (streaming ? "Esperando salida..." : "Sin salida")}</pre>
+      )}
     </div>
   );
 }
@@ -993,9 +1736,17 @@ function formatTime(value: unknown): string | undefined {
 }
 
 function parseLogLine(line: string): ParsedLog {
-  const trimmed = line.trim();
+  // `--timestamps` antepone un RFC3339; lo separamos para usarlo como hora real.
+  let rest = line;
+  let k8sTime: string | undefined;
+  const tsMatch = K8S_TS_RE.exec(line);
+  if (tsMatch) {
+    k8sTime = formatTime(tsMatch[1]);
+    rest = line.slice(tsMatch[0].length);
+  }
+  const trimmed = rest.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return { message: line };
+    return { time: k8sTime, message: rest };
   }
   try {
     const json = JSON.parse(trimmed) as Record<string, unknown>;
@@ -1003,14 +1754,14 @@ function parseLogLine(line: string): ParsedLog {
     const message = pick(json, ["message", "msg", "log", "text"]);
     const source = pick(json, ["logger.name", "logger_name", "service.name", "k8s.container.name", "thread.name"]);
     return {
-      time: formatTime(pick(json, ["@timestamp", "timestamp", "time", "ts", "@t"])),
+      time: formatTime(pick(json, ["@timestamp", "timestamp", "time", "ts", "@t"])) ?? k8sTime,
       level: level ? String(level).toUpperCase() : undefined,
       message: message !== undefined ? String(message) : trimmed,
       source: source ? String(source) : undefined,
       json
     };
   } catch {
-    return { message: line };
+    return { time: k8sTime, message: rest };
   }
 }
 
@@ -1060,8 +1811,19 @@ function LogsPanel({
   title,
   output,
   streaming,
+  following,
+  mode = "live",
+  onModeChange,
   since,
   onSinceChange,
+  start = "",
+  end = "",
+  onStartChange,
+  onEndChange,
+  onQuery,
+  notice,
+  expanded,
+  onToggleExpand,
   onBack,
   onResume,
   onStop
@@ -1069,52 +1831,126 @@ function LogsPanel({
   title: string;
   output: string;
   streaming?: boolean;
+  following?: boolean;
+  mode?: LogsMode;
+  onModeChange?: (mode: LogsMode) => void;
   since?: string;
   onSinceChange?: (value: string) => void;
+  start?: string;
+  end?: string;
+  onStartChange?: (value: string) => void;
+  onEndChange?: (value: string) => void;
+  onQuery?: () => void;
+  notice?: string;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
   onBack?: () => void;
   onResume?: () => void;
   onStop?: () => void;
 }) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [pretty, setPretty] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
 
+  // Virtualizacion: solo renderizamos las filas visibles del scroll.
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(480);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const lines = useMemo(() => output.split("\n").filter((line) => line.trim().length > 0), [output]);
-  const parsed = useMemo(() => lines.map(parseLogLine), [lines]);
 
-  const sinceLabel = (SINCE_OPTIONS.find((option) => option.value === since)?.label ?? since ?? "").toLowerCase();
+  // Cache de parseo: cada linea se parsea una sola vez (no en cada render).
+  const parseCache = useRef<Map<string, ParsedLog>>(new Map());
+  const getParsed = useCallback((line: string) => {
+    const cache = parseCache.current;
+    let entry = cache.get(line);
+    if (!entry) {
+      if (cache.size > 200_000) cache.clear();
+      entry = parseLogLine(line);
+      cache.set(line, entry);
+    }
+    return entry;
+  }, []);
+
+  const term = query.trim();
+  // La busqueda se habilita solo cuando el log esta fijo (no en streaming).
+  // En seguimiento en vivo (preset) se permite; en "Todo"/historico se espera al fin.
+  const searchDisabled = Boolean(streaming && !following);
+
+  // Restricciones del selector de rango: el ancho Inicio->Fin no puede superar
+  // MAX_RANGE_DAYS, y ninguno puede estar en el futuro.
+  const nowLocal = toLocalInputValue(new Date());
+  const rangeMs = MAX_RANGE_DAYS * 86_400_000;
+  const minLocal = (a: string, b: string) => (a < b ? a : b);
+  const startMax = end ? minLocal(end, nowLocal) : nowLocal;
+  const startMin = end ? toLocalInputValue(new Date(new Date(end).getTime() - rangeMs)) : undefined;
+  const endMin = start || undefined;
+  const endMax = start ? minLocal(toLocalInputValue(new Date(new Date(start).getTime() + rangeMs)), nowLocal) : nowLocal;
 
   const matches = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return [] as number[];
+    const needle = term.toLowerCase();
+    if (!needle) return [] as number[];
     const result: number[] = [];
-    parsed.forEach((entry, i) => {
+    for (let i = 0; i < lines.length; i++) {
+      const entry = getParsed(lines[i]);
       const haystack = `${entry.time ?? ""} ${entry.level ?? ""} ${entry.message} ${entry.source ?? ""}`.toLowerCase();
-      if (haystack.includes(term)) result.push(i);
-    });
+      if (haystack.includes(needle)) result.push(i);
+    }
     return result;
-  }, [parsed, query]);
+  }, [lines, term, getParsed]);
 
   const matchSet = useMemo(() => new Set(matches), [matches]);
   const currentLine = matches.length ? matches[Math.min(activeMatch, matches.length - 1)] : -1;
+
+  const total = lines.length;
+  const totalHeight = total * LOG_ROW_H;
+  const startIndex = Math.max(0, Math.floor(scrollTop / LOG_ROW_H) - LOG_OVERSCAN);
+  const endIndex = Math.min(total, Math.ceil((scrollTop + viewportH) / LOG_ROW_H) + LOG_OVERSCAN);
+  const visible: number[] = [];
+  for (let i = startIndex; i < endIndex; i++) visible.push(i);
 
   useEffect(() => {
     setActiveMatch(0);
   }, [query]);
 
+  // Medir alto del viewport del scroll.
   useEffect(() => {
-    if (currentLine >= 0) rowRefs.current[currentLine]?.scrollIntoView({ block: "center" });
+    const el = scrollRef.current;
+    if (!el || !pretty) return;
+    const observer = new ResizeObserver(() => setViewportH(el.clientHeight));
+    observer.observe(el);
+    setViewportH(el.clientHeight);
+    return () => observer.disconnect();
+  }, [pretty]);
+
+  // Auto-scroll al final mientras llegan logs (si el usuario esta al fondo).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !pretty) return;
+    if (stickRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setScrollTop(el.scrollTop);
+    }
+  }, [total, pretty]);
+
+  // Llevar la fila de la coincidencia activa al centro del viewport.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || currentLine < 0) return;
+    stickRef.current = false;
+    el.scrollTop = Math.max(0, currentLine * LOG_ROW_H - el.clientHeight / 2);
+    setScrollTop(el.scrollTop);
   }, [currentLine]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
+        if (searchDisabled) return;
         setSearchOpen(true);
         setPretty(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 0);
@@ -1125,7 +1961,14 @@ function LogsPanel({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [searchOpen]);
+  }, [searchOpen, searchDisabled]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setScrollTop(el.scrollTop);
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < LOG_ROW_H * 2;
+  };
 
   const goNext = () => {
     if (matches.length) setActiveMatch((current) => (current + 1) % matches.length);
@@ -1134,13 +1977,7 @@ function LogsPanel({
     if (matches.length) setActiveMatch((current) => (current - 1 + matches.length) % matches.length);
   };
 
-  const toggle = (index: number) =>
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
+  const selectedEntry = selected != null && lines[selected] ? getParsed(lines[selected]) : null;
 
   return (
     <div className="output-panel logs-panel">
@@ -1154,7 +1991,23 @@ function LogsPanel({
           <h1>{title || "Logs"}</h1>
         </div>
         <div className="panel-actions">
-          {onSinceChange && (
+          {onModeChange && (
+            <div className="logs-mode" role="tablist">
+              <button
+                className={`logs-mode-btn ${mode === "live" ? "active" : ""}`}
+                onClick={() => onModeChange("live")}
+              >
+                En vivo
+              </button>
+              <button
+                className={`logs-mode-btn ${mode === "query" ? "active" : ""}`}
+                onClick={() => onModeChange("query")}
+              >
+                Histórico
+              </button>
+            </div>
+          )}
+          {onSinceChange && mode === "live" && (
             <label className="since-control">
               Desde
               <span className="select-wrap">
@@ -1171,7 +2024,8 @@ function LogsPanel({
           )}
           <button
             className={`toolbar-button ${searchOpen ? "active" : ""}`}
-            title="Buscar (Ctrl+F)"
+            title={searchDisabled ? "Disponible cuando termine de cargar" : "Buscar (Ctrl+F)"}
+            disabled={searchDisabled}
             onClick={() => {
               setPretty(true);
               setSearchOpen((value) => !value);
@@ -1184,21 +2038,62 @@ function LogsPanel({
           <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
             {pretty ? "Ver crudo" : "Ver formateado"}
           </button>
-          {streaming && onStop ? (
-            <button className="toolbar-button danger" onClick={onStop}>
-              <Square size={16} />
-              Detener
+          {onToggleExpand && (
+            <button
+              className={`toolbar-button ${expanded ? "active" : ""}`}
+              title={expanded ? "Reducir pantalla" : "Ampliar pantalla"}
+              onClick={onToggleExpand}
+            >
+              {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              {expanded ? "Reducir" : "Ampliar"}
             </button>
-          ) : (
-            onResume && (
-              <button className="toolbar-button accent" onClick={onResume}>
-                <RefreshCw size={16} />
-                Refrescar
-              </button>
-            )
           )}
+          {mode === "live" &&
+            (streaming && onStop ? (
+              <button className="toolbar-button danger" onClick={onStop}>
+                <Square size={16} />
+                Detener
+              </button>
+            ) : (
+              onResume && (
+                <button className="toolbar-button accent" onClick={onResume}>
+                  <RefreshCw size={16} />
+                  Refrescar
+                </button>
+              )
+            ))}
         </div>
       </div>
+
+      {mode === "query" && (
+        <div className="logs-rangebar">
+          <label>
+            Inicio
+            <input
+              type="datetime-local"
+              value={start}
+              min={startMin}
+              max={startMax}
+              onChange={(event) => onStartChange?.(event.target.value)}
+            />
+          </label>
+          <label>
+            Fin
+            <input
+              type="datetime-local"
+              value={end}
+              min={endMin}
+              max={endMax}
+              onChange={(event) => onEndChange?.(event.target.value)}
+            />
+          </label>
+          <button className="toolbar-button accent" onClick={() => onQuery?.()} disabled={streaming}>
+            <Search size={16} />
+            Consultar
+          </button>
+          <span className="logs-range-hint">Rango máximo {MAX_RANGE_DAYS} días entre Inicio y Fin · sujeto a la retención del nodo</span>
+        </div>
+      )}
 
       {searchOpen && (
         <div className="logs-search">
@@ -1221,7 +2116,7 @@ function LogsPanel({
             }}
           />
           <span className="logs-search-count">
-            {query.trim() ? (matches.length ? `${Math.min(activeMatch, matches.length - 1) + 1}/${matches.length}` : "0/0") : ""}
+            {term ? (matches.length ? `${Math.min(activeMatch, matches.length - 1) + 1}/${matches.length}` : "0/0") : ""}
           </span>
           <button className="logs-search-btn" title="Anterior (Shift+Enter)" onClick={goPrev} disabled={!matches.length}>
             <ChevronUp size={16} />
@@ -1242,44 +2137,52 @@ function LogsPanel({
         </div>
       )}
 
+      {notice && <div className="logs-notice">{notice}</div>}
+
       {lines.length === 0 ? (
         <div className="logs-empty">
-          {streaming
-            ? since
-              ? `Sin registros en los últimos ${sinceLabel}. Esperando nuevos logs…`
-              : "Esperando logs…"
-            : "Sin logs"}
+          {streaming ? (mode === "query" ? "Consultando…" : "Esperando logs…") : "Sin logs"}
         </div>
       ) : pretty ? (
-        <div className="logs-view">
-          {parsed.map((entry, index) => {
-            const isJson = Boolean(entry.json);
-            const isOpen = expanded.has(index);
-            const isMatch = matchSet.has(index);
-            const isCurrent = index === currentLine;
-            const term = query.trim();
-            return (
-              <div
-                key={index}
-                ref={(element) => (rowRefs.current[index] = element)}
-                className={`log-row ${levelClass(entry.level)}${isMatch ? " is-match" : ""}${isCurrent ? " is-current" : ""}`}
-              >
-                <div
-                  className={`log-line${isJson ? " clickable" : ""}`}
-                  onClick={isJson ? () => toggle(index) : undefined}
-                >
-                  {entry.time && <span className="log-time">{entry.time}</span>}
-                  {entry.level && <span className={`log-level ${levelClass(entry.level)}`}>{entry.level}</span>}
-                  <span className="log-message">{term ? highlightText(entry.message, term) : entry.message}</span>
-                  {entry.source && <span className="log-source">{entry.source}</span>}
-                </div>
-                {isJson && isOpen && <pre className="log-json">{JSON.stringify(entry.json, null, 2)}</pre>}
-              </div>
-            );
-          })}
+        <div className="logs-vscroll" ref={scrollRef} onScroll={onScroll}>
+          <div className="logs-vspace" style={{ height: totalHeight }}>
+            <div className="logs-vrows" style={{ transform: `translateY(${startIndex * LOG_ROW_H}px)` }}>
+              {visible.map((index) => {
+                const entry = getParsed(lines[index]);
+                const isJson = Boolean(entry.json);
+                const isMatch = matchSet.has(index);
+                const isCurrent = index === currentLine;
+                return (
+                  <div
+                    key={index}
+                    className={`log-vrow ${levelClass(entry.level)}${isMatch ? " is-match" : ""}${isCurrent ? " is-current" : ""}${selected === index ? " is-selected" : ""}${isJson ? " clickable" : ""}`}
+                    style={{ height: LOG_ROW_H }}
+                    onClick={() => setSelected((current) => (current === index ? null : index))}
+                  >
+                    {entry.time && <span className="log-time">{entry.time}</span>}
+                    {entry.level && <span className={`log-level ${levelClass(entry.level)}`}>{entry.level}</span>}
+                    <span className="log-message">{term ? highlightText(entry.message, term) : entry.message}</span>
+                    {entry.source && <span className="log-source">{entry.source}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       ) : (
         <pre>{output}</pre>
+      )}
+
+      {selectedEntry && (
+        <div className="log-detail">
+          <div className="log-detail-head">
+            <span>Detalle de la línea</span>
+            <button className="icon-button" title="Cerrar" onClick={() => setSelected(null)}>
+              <X size={16} />
+            </button>
+          </div>
+          <pre>{selectedEntry.json ? JSON.stringify(selectedEntry.json, null, 2) : selectedEntry.message}</pre>
+        </div>
       )}
     </div>
   );
@@ -1334,32 +2237,66 @@ function TerminalPanel({
 function ApplyPanel({
   yaml,
   loading,
+  editMode,
   onChange,
   onPick,
-  onApply
+  onApply,
+  onInterrupt,
+  onBack
 }: {
   yaml: string;
   loading: boolean;
+  editMode?: boolean;
   onChange: (value: string) => void;
   onPick: () => void;
   onApply: () => void;
+  onInterrupt?: () => void;
+  onBack?: () => void;
 }) {
+  // En modo edicion, mientras se trae el YAML del recurso (loading sin texto aun)
+  // mostramos un estado de carga con opcion de interrumpir.
+  const fetching = Boolean(loading && editMode && !yaml.trim());
   return (
     <div className="apply-panel">
       <div className="panel-title">
-        <h1>Apply YAML</h1>
+        <div className="panel-title-main">
+          {onBack && !fetching && (
+            <button className="icon-button" title="Volver a la lista" onClick={onBack}>
+              <ArrowLeft size={18} />
+            </button>
+          )}
+          <h1>{editMode ? "Editar recurso" : "Apply YAML"}</h1>
+        </div>
         <div className="button-row">
-          <button className="toolbar-button" onClick={onPick}>
-            <FolderPlus size={16} />
-            Archivo
-          </button>
-          <button className="toolbar-button primary" onClick={onApply} disabled={loading || !yaml.trim()}>
-            <Play size={16} />
-            Aplicar
-          </button>
+          {fetching && onInterrupt ? (
+            <button className="toolbar-button danger" onClick={onInterrupt}>
+              <Square size={16} />
+              Interrumpir
+            </button>
+          ) : (
+            <>
+              {!editMode && (
+                <button className="toolbar-button" onClick={onPick}>
+                  <FolderPlus size={16} />
+                  Archivo
+                </button>
+              )}
+              <button className="toolbar-button primary" onClick={onApply} disabled={loading || !yaml.trim()}>
+                <Play size={16} />
+                {editMode ? "Guardar (replace)" : "Aplicar"}
+              </button>
+            </>
+          )}
         </div>
       </div>
-      <textarea value={yaml} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
+      {fetching ? (
+        <div className="loading-state">
+          <RefreshCw size={20} className="spin" />
+          <span>Obteniendo el recurso, esperando resultado...</span>
+        </div>
+      ) : (
+        <textarea value={yaml} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
+      )}
     </div>
   );
 }
@@ -1380,7 +2317,9 @@ function createTab(context: string, namespace?: string): TabSession {
     terminalCommand: "kubectl get pods",
     terminalOutput: "",
     yamlDraft: "",
-    loading: false
+    yamlEditMode: false,
+    loading: false,
+    resourceCache: {}
   };
 }
 

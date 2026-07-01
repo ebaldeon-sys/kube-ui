@@ -10,6 +10,7 @@ const api = {
   runKubectl: (request) => ipcRenderer.invoke("kubectl:run", request),
   runManualKubectl: (request) => ipcRenderer.invoke("kubectl:runManual", request),
   applyYaml: (request) => ipcRenderer.invoke("kubectl:applyYaml", request),
+  replaceYaml: (request) => ipcRenderer.invoke("kubectl:replaceYaml", request),
   pickYamlFile: () => ipcRenderer.invoke("kubectl:pickYamlFile"),
   streamKubectl: (request, handlers) => {
     const streamId = makeStreamId();
