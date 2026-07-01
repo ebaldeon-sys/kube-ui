@@ -14,6 +14,7 @@ import {
   PanelLeftOpen,
   Pause,
   Pencil,
+  Pin,
   Play,
   Plus,
   Maximize2,
@@ -105,6 +106,9 @@ type TabSession = {
   // YAML libre (archivo/pegado) y se usa `kubectl apply`.
   yamlEditMode: boolean;
   loading: boolean;
+  runState: TabRunState;
+  runLabel: string;
+  streamPinned: boolean;
   // Cache por kind: guarda el ultimo estado antes de cambiar de recurso.
   resourceCache: Partial<Record<ResourceKey, ResourceSnapshot>>;
 };
@@ -327,6 +331,16 @@ const RESOURCE_CATEGORIES: Array<{ label: string; keys: ResourceKey[] }> = [
 ];
 
 type LogsMode = "live" | "query";
+type TabRunState = "idle" | "running" | "done" | "stopped" | "error";
+type StreamView = "logs" | "terminal";
+
+type StreamOwner = {
+  tabId: string;
+  view: StreamView;
+  live: boolean;
+  pinned: boolean;
+  autoStopOnLeave: boolean;
+};
 
 type LogsMeta = {
   cap: number;
@@ -487,6 +501,14 @@ function isUnsupportedInteractiveCommand(command: string) {
   return (/\b(exec|attach)\b/.test(normalized) && hasInteractiveFlag) || /\bport-forward\b/.test(normalized);
 }
 
+function runStateText(state: TabRunState): string {
+  if (state === "running") return "Ejecutando";
+  if (state === "done") return "Terminado";
+  if (state === "stopped") return "Detenido";
+  if (state === "error") return "Error";
+  return "Sin actividad";
+}
+
 export function App() {
   if (!window.kubeui) {
     return <MissingBridge />;
@@ -505,7 +527,7 @@ export function App() {
   const [globalMessage, setGlobalMessage] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const [namespaceDraft, setNamespaceDraft] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [streamOwner, setStreamOwner] = useState<StreamOwner | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [logsSince, setLogsSince] = useState("5m");
   const [logsMode, setLogsMode] = useState<LogsMode>("live");
@@ -542,19 +564,36 @@ export function App() {
   const stopStreamRef = useRef<(() => void) | null>(null);
   // Token incremental para descartar cargas de lista obsoletas (cambio rapido de recurso).
   const loadTokenRef = useRef(0);
-  // Token incremental para acciones puntuales (describe / yaml / editar / delete...).
-  // Permite "Interrumpir": al incrementarlo, el resultado en vuelo se descarta.
-  const actionTokenRef = useRef(0);
+  // Token incremental por pestaña para acciones puntuales
+  // (describe / yaml / editar / delete...). Permite que una pestaña termine
+  // en segundo plano sin que otra pestaña invalide su resultado.
+  const actionTokenRef = useRef<Record<string, number>>({});
   // Buffer y temporizador para agrupar los chunks de logs antes de pintarlos.
   const logBufferRef = useRef<string>("");
   const logFlushTimerRef = useRef<number | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  // Ref siempre actualizada con la pestana activa (para usarla dentro de
-  // callbacks memorizados como stopStream sin recrearlos en cada render).
-  const activeTabIdRef = useRef(activeTabId);
-  activeTabIdRef.current = activeTabId;
+  const streamOwnerRef = useRef<StreamOwner | null>(null);
 
-  const stopStream = useCallback(() => {
+  const setCurrentStreamOwner = useCallback((owner: StreamOwner | null) => {
+    streamOwnerRef.current = owner;
+    setStreamOwner(owner);
+  }, []);
+
+  const nextActionToken = useCallback((tabId: string) => {
+    const next = (actionTokenRef.current[tabId] ?? 0) + 1;
+    actionTokenRef.current[tabId] = next;
+    return next;
+  }, []);
+
+  const cancelTabAction = useCallback((tabId: string) => {
+    actionTokenRef.current[tabId] = (actionTokenRef.current[tabId] ?? 0) + 1;
+  }, []);
+
+  const isTabActionCurrent = useCallback((tabId: string, token: number) => actionTokenRef.current[tabId] === token, []);
+
+  const stopStream = useCallback((opts?: { tabId?: string; state?: TabRunState; label?: string }) => {
+    const owner = streamOwnerRef.current;
+    if (opts?.tabId && owner?.tabId !== opts.tabId) return false;
     if (logFlushTimerRef.current != null) {
       window.clearTimeout(logFlushTimerRef.current);
       logFlushTimerRef.current = null;
@@ -566,7 +605,7 @@ export function App() {
       stopStreamRef.current();
       stopStreamRef.current = null;
     }
-    setStreaming(false);
+    setCurrentStreamOwner(null);
     // Al cortar el stream manualmente, onEnd no se dispara (el listener se
     // remueve antes de detenerlo), asi que liberamos el "loading" de la pestana
     // que estaba transmitiendo; de lo contrario queda bloqueada (no se puede
@@ -574,14 +613,22 @@ export function App() {
     // stream; de lo contrario este metodo (que tambien se llama al cambiar de
     // vista) borraria el "loading" de una accion puntual recien lanzada
     // (describe / yaml / editar) y mostraria "Sin salida" en vez de "Cargando".
-    if (hadStream) {
-      const streamingTabId = activeTabIdRef.current;
-      setTabs((current) => current.map((tab) => (tab.id === streamingTabId && tab.loading ? { ...tab, loading: false } : tab)));
+    if (hadStream && owner) {
+      setTabs((current) =>
+        current.map((tab) =>
+          tab.id === owner.tabId && tab.loading
+            ? { ...tab, loading: false, runState: opts?.state ?? "stopped", runLabel: opts?.label ?? "Detenido" }
+            : tab
+        )
+      );
     }
-  }, []);
+    return hadStream;
+  }, [setCurrentStreamOwner]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const viewMode: ViewMode = activeTab?.viewMode ?? fallbackViewMode;
+  const activeStreamOwner = streamOwner?.tabId === activeTabId ? streamOwner : null;
+  const streaming = Boolean(activeStreamOwner);
   const kubeconfigPaths = useMemo(() => settings?.kubeconfigPaths ?? [], [settings]);
   const selectedName = activeTab?.selectedName ?? "";
   const selectedConfig = activeTab ? configByKey[activeTab.resource] : resourceConfigs[0];
@@ -743,7 +790,7 @@ export function App() {
         setTabs((current) =>
           current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
         );
-      updateTab(tab.id, { loading: true, output: "", outputTitle: "", rows: [], selectedName: "" });
+      updateTab(tab.id, { loading: true, runState: "running", runLabel: `Cargando ${config.label}`, output: "", outputTitle: "", rows: [], selectedName: "" });
       let result: KubectlResult;
       try {
         result = await window.kubeui.runKubectl({
@@ -756,6 +803,8 @@ export function App() {
         if (loadTokenRef.current !== token) return;
         applyIfCurrent({
           loading: false,
+          runState: "error",
+          runLabel: `Error: ${config.label}`,
           outputTitle: "Error",
           output: unknownMessage(error),
           lastCommand: formatKubectlCommand(["get", config.kubectlName, "-o", "json"], tab.context, config.namespaced ? tab.namespace : undefined),
@@ -765,7 +814,7 @@ export function App() {
       }
       if (loadTokenRef.current !== token) return;
       if (!result.ok) {
-        applyIfCurrent({ loading: false, outputTitle: "Error", output: kubectlErrorText(result, "No se pudieron cargar los recursos."), lastCommand: result.command, rows: [] });
+        applyIfCurrent({ loading: false, runState: "error", runLabel: `Error: ${config.label}`, outputTitle: "Error", output: kubectlErrorText(result, "No se pudieron cargar los recursos."), lastCommand: result.command, rows: [] });
         return;
       }
       let items: KubeItem[] = [];
@@ -774,6 +823,8 @@ export function App() {
       } catch (error) {
         applyIfCurrent({
           loading: false,
+          runState: "error",
+          runLabel: `Error: ${config.label}`,
           outputTitle: "Error",
           output: `kubectl devolvio una respuesta JSON invalida.\n\n${unknownMessage(error)}`,
           lastCommand: result.command,
@@ -781,7 +832,7 @@ export function App() {
         });
         return;
       }
-      applyIfCurrent({ rows: items, selectedName: "", loading: false, lastCommand: result.command });
+      applyIfCurrent({ rows: items, selectedName: "", loading: false, runState: "done", runLabel: `${config.label} cargados`, lastCommand: result.command });
     },
     [kubeconfigPaths]
   );
@@ -835,23 +886,35 @@ export function App() {
   }, [activeTab?.id, activeTab?.selectedName]);
 
   // Detener cualquier streaming activo al cerrar la app.
-  useEffect(() => () => stopStream(), [stopStream]);
+  useEffect(
+    () => () => {
+      stopStream();
+    },
+    [stopStream]
+  );
 
   useEffect(() => () => {
     if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
   }, []);
 
-  // Detener el streaming al cambiar de pestaña para no dejar procesos
-  // `kubectl logs -f` / exec colgados consumiendo recursos en segundo plano.
+  // Al cambiar de pestaña solo detenemos streams vivos no fijados. Los comandos
+  // finitos pueden terminar en segundo plano y actualizar su propia pestaña.
   useEffect(() => {
-    stopStream();
+    const owner = streamOwnerRef.current;
+    if (owner?.tabId !== activeTabId && owner?.autoStopOnLeave) {
+      stopStream({ tabId: owner.tabId, state: "stopped", label: "Detenido al cambiar de pestaña" });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId]);
 
-  // Detener el streaming al salir de las vistas que lo usan (logs / terminal).
+  // Al salir de logs/terminal, los streams vivos no fijados se detienen; los
+  // fijados o finitos pueden seguir y conservar su salida en la pestaña.
   useEffect(() => {
-    if (viewMode !== "logs" && viewMode !== "terminal") stopStream();
-  }, [viewMode, stopStream]);
+    const owner = streamOwnerRef.current;
+    if (owner?.tabId === activeTabId && owner.autoStopOnLeave && viewMode !== owner.view) {
+      stopStream({ tabId: owner.tabId, state: "stopped", label: "Detenido al cambiar de vista" });
+    }
+  }, [activeTabId, viewMode, stopStream]);
 
   // Al salir de la vista de logs, salir tambien del modo ampliado.
   useEffect(() => {
@@ -884,7 +947,8 @@ export function App() {
     if (!activeTab) return;
     const next = namespaceDraft.trim() || "default";
     if (next !== activeTab.namespace) {
-      updateActiveTab({ namespace: next, rows: [], selectedName: "" });
+      const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
+      updateActiveTab({ namespace: next, rows: [], selectedName: "", runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
     } else if (next !== namespaceDraft) {
       setNamespaceDraft(next);
     }
@@ -896,6 +960,7 @@ export function App() {
 
   const refreshResources = async () => {
     if (!activeTab) return;
+    stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido al refrescar" });
     setViewMode("table");
     await loadResources(activeTab);
   };
@@ -903,20 +968,22 @@ export function App() {
   // Interrumpe la accion en curso: descarta el resultado en vuelo (via token),
   // libera el "loading" y vuelve a la lista para desbloquear las acciones.
   const interruptAction = () => {
-    actionTokenRef.current++;
-    stopStream();
-    updateActiveTab({ loading: false });
+    if (activeTab) {
+      cancelTabAction(activeTab.id);
+      stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido" });
+    }
+    updateActiveTab({ loading: false, runState: "stopped", runLabel: "Interrumpido" });
     setViewMode("table");
   };
 
   const showOutput = async (mode: ViewMode, args: string[], title: string): Promise<KubectlResult | null> => {
     if (!activeTab) return null;
-    stopStream();
-    const token = ++actionTokenRef.current;
     const tabId = activeTab.id;
+    stopStream({ tabId, state: "stopped", label: "Detenido" });
+    const token = nextActionToken(tabId);
     // Cambiamos de vista de inmediato y mostramos el estado de carga: el usuario
     // ve que el comando se lanzo y puede interrumpirlo mientras espera.
-    updateActiveTab({ loading: true, outputTitle: title, output: "" });
+    updateActiveTab({ loading: true, outputTitle: title, output: "", runState: "running", runLabel: title });
     setViewMode(mode);
     let result: KubectlResult;
     try {
@@ -930,9 +997,11 @@ export function App() {
         command: formatKubectlCommand(args, activeTab.context, configByKey[activeTab.resource].namespaced ? activeTab.namespace : undefined)
       };
     }
-    if (actionTokenRef.current !== token) return null; // interrumpido o reemplazado
+    if (!isTabActionCurrent(tabId, token)) return null; // interrumpido o reemplazado
     updateTab(tabId, {
       loading: false,
+      runState: result.ok ? "done" : "error",
+      runLabel: result.ok ? title : `Error: ${title}`,
       outputTitle: result.ok ? title : `Error: ${title}`,
       output: result.ok ? result.stdout : kubectlErrorText(result, "El comando fallo."),
       lastCommand: result.command
@@ -946,7 +1015,7 @@ export function App() {
     override?: Partial<{ mode: LogsMode; since: string; start: string; end: string; container: string; previous: boolean }>
   ) => {
     if (!activeTab || !activeTab.selectedName) return;
-    stopStream();
+    stopStream({ state: "stopped", label: "Reemplazado" });
     const mode = override?.mode ?? logsMode;
     const since = override?.since ?? logsSince;
     const start = override?.start ?? logsStart;
@@ -991,9 +1060,22 @@ export function App() {
       command,
       target
     });
-    updateActiveTab({ loading: true, outputTitle: `Logs ${name}`, output: "", lastCommand: command });
+    updateActiveTab({
+      loading: true,
+      runState: "running",
+      runLabel: follow ? "Logs en vivo" : "Consultando logs",
+      outputTitle: `Logs ${name}`,
+      output: "",
+      lastCommand: command
+    });
     setViewMode("logs");
-    setStreaming(true);
+    setCurrentStreamOwner({
+      tabId,
+      view: "logs",
+      live: follow,
+      pinned: activeTab.streamPinned,
+      autoStopOnLeave: follow && !activeTab.streamPinned
+    });
     logBufferRef.current = "";
     // Acumulador local del texto recibido en esta carga (para calcular el
     // resultado final sin depender del estado asincrono de setTabs).
@@ -1052,7 +1134,14 @@ export function App() {
           setTabs((current) =>
             current.map((tab) =>
               tab.id === tabId
-                ? { ...tab, loading: false, lastCommand: command || tab.lastCommand, output: finalOut }
+                ? {
+                    ...tab,
+                    loading: false,
+                    runState: commandError ? "error" : "done",
+                    runLabel: commandError ? "Error en logs" : "Logs terminados",
+                    lastCommand: command || tab.lastCommand,
+                    output: finalOut
+                  }
               : tab
             )
           );
@@ -1071,7 +1160,7 @@ export function App() {
               );
             }
           }
-          setStreaming(false);
+          if (streamOwnerRef.current?.tabId === tabId) setCurrentStreamOwner(null);
           stopStreamRef.current = null;
         }
       }
@@ -1092,6 +1181,19 @@ export function App() {
   const changeLogsPrevious = (value: boolean) => {
     setLogsPrevious(value);
     if (activeTab?.selectedName && viewMode === "logs") runLogs({ previous: value });
+  };
+
+  const changeLogsPinned = (value: boolean) => {
+    if (!activeTab) return;
+    updateActiveTab({ streamPinned: value });
+    const owner = streamOwnerRef.current;
+    if (owner?.tabId === activeTab.id && owner.view === "logs" && owner.live) {
+      setCurrentStreamOwner({
+        ...owner,
+        pinned: value,
+        autoStopOnLeave: !value
+      });
+    }
   };
 
   // Cambia entre modo Live e historico. Live recarga al instante; el historico
@@ -1141,10 +1243,10 @@ export function App() {
   };
 
   const closeTab = (tabId: string) => {
+    stopStream({ tabId, state: "stopped", label: "Detenido al cerrar pestaña" });
     setTabs((current) => {
       const next = current.filter((tab) => tab.id !== tabId);
       if (activeTabId === tabId) {
-        stopStream();
         setActiveTabId(next[0]?.id ?? "");
       }
       return next;
@@ -1182,13 +1284,15 @@ export function App() {
 
   const deleteResource = async () => {
     if (!activeTab || !selectedName) return;
+    const tab = activeTab;
     if (!(await requestConfirm(`Eliminar ${selectedConfig.label}: ${selectedName}?`))) return;
     const result = await showOutput("details", ["delete", selectedConfig.kubectlName, selectedName], `Eliminar ${selectedName}`);
-    if (result?.ok) await refreshResources();
+    if (result?.ok) await loadResources(tab);
   };
 
   const restartResource = async () => {
     if (!activeTab || !selectedName) return;
+    const tab = activeTab;
     const kind = activeTab.resource;
     let args: string[];
     if (kind === "pods") {
@@ -1200,16 +1304,17 @@ export function App() {
     }
     if (!(await requestConfirm(`Reiniciar ${selectedName}?`))) return;
     const result = await showOutput("details", args, `Reiniciar ${selectedName}`);
-    if (result?.ok) await refreshResources();
+    if (result?.ok) await loadResources(tab);
   };
 
   const scaleDeployment = async () => {
     if (!activeTab || !selectedName) return;
+    const tab = activeTab;
     if (!["deployments", "statefulsets", "replicasets"].includes(activeTab.resource)) return;
     const replicas = await requestInput("Réplicas", "1");
     if (!replicas || !/^\d+$/.test(replicas)) return;
     const result = await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
-    if (result?.ok) await refreshResources();
+    if (result?.ok) await loadResources(tab);
   };
 
   // "Editar": traemos el YAML del recurso a un borrador editable y abrimos el
@@ -1217,12 +1322,12 @@ export function App() {
   // `kubectl edit`: actualiza el objeto vivo directamente).
   const editResource = async () => {
     if (!activeTab || !selectedName) return;
-    stopStream();
-    const token = ++actionTokenRef.current;
     const tabId = activeTab.id;
+    stopStream({ tabId, state: "stopped", label: "Detenido" });
+    const token = nextActionToken(tabId);
     // Abrimos el panel de edicion de inmediato en estado de carga (mientras se
     // trae el YAML del recurso). El usuario puede interrumpir si demora.
-    updateActiveTab({ loading: true, yamlDraft: "", yamlEditMode: true, outputTitle: `Editar ${selectedName}` });
+    updateActiveTab({ loading: true, runState: "running", runLabel: `Editar ${selectedName}`, yamlDraft: "", yamlEditMode: true, outputTitle: `Editar ${selectedName}` });
     setViewMode("apply");
     let result: KubectlResult;
     try {
@@ -1236,12 +1341,12 @@ export function App() {
         command: formatKubectlCommand(["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], activeTab.context, activeTab.namespace)
       };
     }
-    if (actionTokenRef.current !== token) return; // interrumpido o reemplazado
+    if (!isTabActionCurrent(tabId, token)) return; // interrumpido o reemplazado
     if (!result.ok) {
-      updateTab(tabId, { loading: false, viewMode: "details", outputTitle: "Error: Editar recurso", output: kubectlErrorText(result, "No se pudo obtener el YAML."), lastCommand: result.command });
+      updateTab(tabId, { loading: false, runState: "error", runLabel: "Error: Editar recurso", viewMode: "details", outputTitle: "Error: Editar recurso", output: kubectlErrorText(result, "No se pudo obtener el YAML."), lastCommand: result.command });
       return;
     }
-    updateTab(tabId, { loading: false, yamlDraft: result.stdout, yamlEditMode: true, lastCommand: result.command });
+    updateTab(tabId, { loading: false, runState: "done", runLabel: "YAML cargado", yamlDraft: result.stdout, yamlEditMode: true, lastCommand: result.command });
   };
 
   const triggerCronJob = async () => {
@@ -1253,6 +1358,7 @@ export function App() {
 
   const toggleCronSuspend = async () => {
     if (!activeTab || activeTab.resource !== "cronjobs" || !selectedName) return;
+    const tab = activeTab;
     const row = activeTab.rows.find((item) => nameOf(item) === selectedName);
     const next = !Boolean((row?.spec as { suspend?: boolean })?.suspend);
     const result = await showOutput(
@@ -1260,24 +1366,32 @@ export function App() {
       ["patch", "cronjob", selectedName, "-p", JSON.stringify({ spec: { suspend: next } })],
       `${next ? "Suspender" : "Reanudar"} ${selectedName}`
     );
-    if (result?.ok) await refreshResources();
+    if (result?.ok) await loadResources(tab);
   };
 
   const runTerminal = () => {
     if (!activeTab || !activeTab.terminalCommand.trim()) return;
-    stopStream();
+    stopStream({ state: "stopped", label: "Reemplazado" });
     const tabId = activeTab.id;
     const command = activeTab.terminalCommand;
     if (isUnsupportedInteractiveCommand(command)) {
       updateActiveTab({
         terminalOutput:
           `$ ${command}\n\nEste comando requiere una sesion interactiva o de larga duracion que todavia no esta soportada en esta terminal.\nUsa una terminal externa para exec -it, attach -it o port-forward.`,
-        lastCommand: command
+        lastCommand: command,
+        runState: "error",
+        runLabel: "Comando no soportado"
       });
       return;
     }
-    updateActiveTab({ loading: true, terminalOutput: `$ ${command}\n\n` });
-    setStreaming(true);
+    updateActiveTab({ loading: true, runState: "running", runLabel: "Terminal", terminalOutput: `$ ${command}\n\n` });
+    setCurrentStreamOwner({
+      tabId,
+      view: "terminal",
+      live: false,
+      pinned: false,
+      autoStopOnLeave: false
+    });
     stopStreamRef.current = window.kubeui.streamKubectl(
       {
         command,
@@ -1289,15 +1403,23 @@ export function App() {
         onData: (chunk) => {
           setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, terminalOutput: tab.terminalOutput + chunk } : tab)));
         },
-        onEnd: ({ command: resolved, error }) => {
+        onEnd: ({ command: resolved, error, code }) => {
+          const hasError = Boolean(error) || (code !== null && code !== 0);
           setTabs((current) =>
             current.map((tab) =>
               tab.id === tabId
-                ? { ...tab, loading: false, lastCommand: resolved || tab.lastCommand, terminalOutput: error ? `${tab.terminalOutput}\n${error}` : tab.terminalOutput }
+                ? {
+                    ...tab,
+                    loading: false,
+                    runState: hasError ? "error" : "done",
+                    runLabel: hasError ? "Error en terminal" : "Terminal finalizada",
+                    lastCommand: resolved || tab.lastCommand,
+                    terminalOutput: error ? `${tab.terminalOutput}\n${error}` : tab.terminalOutput
+                  }
                 : tab
             )
           );
-          setStreaming(false);
+          if (streamOwnerRef.current?.tabId === tabId) setCurrentStreamOwner(null);
           stopStreamRef.current = null;
         }
       }
@@ -1316,12 +1438,15 @@ export function App() {
 
   const applyYaml = async () => {
     if (!activeTab || !activeTab.yamlDraft.trim()) return;
+    const tabId = activeTab.id;
+    stopStream({ tabId, state: "stopped", label: "Detenido" });
     const editMode = activeTab.yamlEditMode;
     const confirmMessage = editMode
       ? "Guardar cambios del recurso con kubectl replace?"
       : "Aplicar YAML en el contexto seleccionado?";
     if (!(await requestConfirm(confirmMessage))) return;
-    updateActiveTab({ loading: true });
+    const token = nextActionToken(tabId);
+    updateActiveTab({ loading: true, runState: "running", runLabel: editMode ? "Editando recurso" : "Aplicando YAML" });
     const payload = {
       yaml: activeTab.yamlDraft,
       kubeconfigPaths,
@@ -1340,13 +1465,16 @@ export function App() {
         command: editMode ? "kubectl replace -f <tempfile>" : "kubectl apply -f <tempfile>"
       };
     }
-    updateActiveTab({
+    if (!isTabActionCurrent(tabId, token)) return;
+    updateTab(tabId, {
       loading: false,
+      viewMode: "details",
+      runState: result.ok ? "done" : "error",
+      runLabel: result.ok ? (editMode ? "Recurso editado" : "YAML aplicado") : `Error: ${editMode ? "Editar recurso" : "Aplicar YAML"}`,
       outputTitle: result.ok ? (editMode ? "Editar recurso" : "Aplicar YAML") : `Error: ${editMode ? "Editar recurso" : "Aplicar YAML"}`,
       output: result.ok ? result.stdout : kubectlErrorText(result, "No se pudo aplicar el YAML."),
       lastCommand: result.command
     });
-    setViewMode("details");
   };
 
   // Sugerencias de namespace: combinamos el del kubeconfig, los listados en vivo (si el cluster lo permite) y el actual.
@@ -1377,11 +1505,16 @@ export function App() {
               key={tab.id}
               className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
               onClick={() => {
-                stopStream();
                 setActiveTabId(tab.id);
               }}
             >
               <Layers3 size={15} />
+              {tab.runState !== "idle" && (
+                <span
+                  className={`tab-run-dot ${tab.runState}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " pinned" : ""}`}
+                  title={`${runStateText(tab.runState)}${tab.runLabel ? `: ${tab.runLabel}` : ""}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " · fijado" : ""}`}
+                />
+              )}
               <span>{tab.title}</span>
               {tabs.length > 1 && (
                 <X
@@ -1415,8 +1548,8 @@ export function App() {
                         key={config.key}
                         className={activeTab?.resource === config.key && (viewMode === "table" || viewMode === "details" || viewMode === "yaml" || viewMode === "apply") ? "active" : ""}
                         onClick={() => {
-                          stopStream();
                           if (!activeTab) return;
+                          const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de recurso" });
                           if (activeTab.resource === config.key) {
                             // Mismo kind: si estamos en una accion, volver a la tabla.
                             setViewMode("table");
@@ -1453,7 +1586,9 @@ export function App() {
                               // arrastre entre kinds.
                               yamlDraft: "",
                               yamlEditMode: false,
-                              loading: false
+                              loading: false,
+                              runState: stopped ? "stopped" : "idle",
+                              runLabel: stopped ? "Detenido por cambio de recurso" : ""
                             };
                           }));
                         }}
@@ -1489,8 +1624,16 @@ export function App() {
                     value={activeTab.context}
                     onChange={(event) => {
                       const nextContext = event.target.value;
-                      stopStream();
-                      updateActiveTab({ context: nextContext, namespace: contextNamespaces[nextContext] ?? "default", rows: [], selectedName: "", title: nextContext || "Sin contexto" });
+                      const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de contexto" });
+                      updateActiveTab({
+                        context: nextContext,
+                        namespace: contextNamespaces[nextContext] ?? "default",
+                        rows: [],
+                        selectedName: "",
+                        title: nextContext || "Sin contexto",
+                        runState: stopped ? "stopped" : "idle",
+                        runLabel: stopped ? "Detenido por cambio de contexto" : ""
+                      });
                       refreshNamespaces(nextContext);
                     }}
                   >
@@ -1516,7 +1659,8 @@ export function App() {
                       const value = event.target.value;
                       setNamespaceDraft(value);
                       if (namespaces.includes(value) && value !== activeTab.namespace) {
-                        updateActiveTab({ namespace: value, rows: [], selectedName: "" });
+                        const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
+                        updateActiveTab({ namespace: value, rows: [], selectedName: "", runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
                       }
                     }}
                     onKeyDown={(event) => {
@@ -1623,13 +1767,18 @@ export function App() {
               selectedContainer={logsContainer || logDefaultContainer}
               defaultContainer={logDefaultContainer}
               previous={logsPrevious}
+              pinned={activeTab.streamPinned}
               onContainerChange={changeLogsContainer}
               onPreviousChange={changeLogsPrevious}
+              onPinnedChange={changeLogsPinned}
               expanded={logsExpanded}
               onToggleExpand={() => setLogsExpanded((value) => !value)}
               onCopy={copyToClipboard}
               onBack={() => {
-                stopStream();
+                const owner = streamOwnerRef.current;
+                if (owner?.tabId === activeTab.id && owner.autoStopOnLeave) {
+                  stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido al volver" });
+                }
                 setViewMode("table");
               }}
               onResume={() => runLogs()}
@@ -2461,8 +2610,10 @@ function LogsPanel({
   selectedContainer = "",
   defaultContainer = "",
   previous = false,
+  pinned = false,
   onContainerChange,
   onPreviousChange,
+  onPinnedChange,
   expanded,
   onToggleExpand,
   onCopy,
@@ -2489,8 +2640,10 @@ function LogsPanel({
   selectedContainer?: string;
   defaultContainer?: string;
   previous?: boolean;
+  pinned?: boolean;
   onContainerChange?: (value: string) => void;
   onPreviousChange?: (value: boolean) => void;
+  onPinnedChange?: (value: boolean) => void;
   expanded?: boolean;
   onToggleExpand?: () => void;
   onCopy?: (text: string, label?: string) => void;
@@ -2503,7 +2656,7 @@ function LogsPanel({
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
-  const [detailHeight, setDetailHeight] = useState(220);
+  const [detailHeight, setDetailHeight] = useState(180);
   const [detailTab, setDetailTab] = useState<"message" | "json" | "raw" | "fields">("message");
   const [activeLevelFilters, setActiveLevelFilters] = useState<LogLevelFilter[]>([]);
   const [followTail, setFollowTail] = useState(true);
@@ -2698,7 +2851,7 @@ function LogsPanel({
 
     const onMove = (moveEvent: PointerEvent) => {
       const next = startHeight + startY - moveEvent.clientY;
-      setDetailHeight(Math.min(Math.max(next, 130), maxHeight));
+      setDetailHeight(Math.min(Math.max(next, 110), maxHeight));
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
@@ -2805,6 +2958,16 @@ function LogsPanel({
               </button>
             </>
           )}
+          {mode === "live" && following && onPinnedChange && (
+            <button
+              className={`toolbar-button ${pinned ? "active" : ""}`}
+              title={pinned ? "Dejar de mantener en segundo plano" : "Mantener logs en segundo plano"}
+              onClick={() => onPinnedChange(!pinned)}
+            >
+              <Pin size={16} />
+              {pinned ? "Fijado" : "Fijar"}
+            </button>
+          )}
           <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
             {pretty ? "Ver crudo" : "Ver formateado"}
           </button>
@@ -2862,20 +3025,22 @@ function LogsPanel({
           <input type="checkbox" checked={previous} onChange={(event) => onPreviousChange?.(event.target.checked)} disabled={streaming} />
           Anterior
         </label>
-        <div className="logs-level-filters" aria-label="Filtrar por nivel">
-          {LOG_LEVEL_FILTERS.map((filter) => (
-            <button
-              key={filter.value}
-              className={`logs-filter-chip ${activeLevelSet.has(filter.value) ? "active" : ""}`}
-              onClick={() => toggleLevelFilter(filter.value)}
-              disabled={!levelCounts[filter.value]}
-              title={`${levelCounts[filter.value].toLocaleString()} líneas`}
-            >
-              {filter.label}
-              <span>{levelCounts[filter.value].toLocaleString()}</span>
-            </button>
-          ))}
-        </div>
+        {pretty && (
+          <div className="logs-level-filters" aria-label="Filtrar por nivel">
+            {LOG_LEVEL_FILTERS.map((filter) => (
+              <button
+                key={filter.value}
+                className={`logs-filter-chip ${activeLevelSet.has(filter.value) ? "active" : ""}`}
+                onClick={() => toggleLevelFilter(filter.value)}
+                disabled={!levelCounts[filter.value]}
+                title={`${levelCounts[filter.value].toLocaleString()} líneas`}
+              >
+                {filter.label}
+                <span>{levelCounts[filter.value].toLocaleString()}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="logs-summary">
           <span>{lineSummary}</span>
           {meta?.target && <span>{meta.target}</span>}
@@ -3185,6 +3350,9 @@ function createTab(context: string, namespace?: string): TabSession {
     yamlDraft: "",
     yamlEditMode: false,
     loading: false,
+    runState: "idle",
+    runLabel: "",
+    streamPinned: false,
     resourceCache: {}
   };
 }
