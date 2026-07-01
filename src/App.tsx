@@ -359,8 +359,8 @@ const MAX_QUERY_LINES = 50000;
 // Ancho maximo del rango (Inicio -> Fin) permitido en la consulta historica.
 const MAX_RANGE_DAYS = 3;
 // Intervalo de agrupacion: en lugar de re-renderizar en cada chunk recibido,
-// acumulamos y volcamos como mucho cada LOG_FLUSH_MS milisegundos.
-const LOG_FLUSH_MS = 150;
+// acumulamos y volcamos rapido para que los logs empiecen a verse antes.
+const LOG_FLUSH_MS = 60;
 // Virtualizacion: alto fijo de cada fila (px) y filas extra fuera de viewport.
 const LOG_ROW_H = 24;
 const LOG_OVERSCAN = 12;
@@ -608,7 +608,7 @@ export function App() {
 
   const stopStream = useCallback((opts?: { tabId?: string; state?: TabRunState; label?: string }) => {
     const owner = streamOwnerRef.current;
-    if (opts?.tabId && owner?.tabId !== opts.tabId) return false;
+    if (opts?.tabId && owner && owner.tabId !== opts.tabId) return false;
     if (logFlushTimerRef.current != null) {
       window.clearTimeout(logFlushTimerRef.current);
       logFlushTimerRef.current = null;
@@ -623,21 +623,19 @@ export function App() {
     setCurrentStreamOwner(null);
     // Al cortar el stream manualmente, onEnd no se dispara (el listener se
     // remueve antes de detenerlo), asi que liberamos el "loading" de la pestana
-    // que estaba transmitiendo; de lo contrario queda bloqueada (no se puede
-    // refrescar la lista al volver). OJO: solo lo hacemos si REALMENTE habia un
-    // stream; de lo contrario este metodo (que tambien se llama al cambiar de
-    // vista) borraria el "loading" de una accion puntual recien lanzada
-    // (describe / yaml / editar) y mostraria "Sin salida" en vez de "Cargando".
-    if (hadStream && owner) {
+    // que estaba transmitiendo. Si por una carrera quedo el owner pero no el
+    // callback de corte, tambien limpiamos ese estado residual.
+    const targetTabId = owner?.tabId ?? opts?.tabId;
+    if ((hadStream || owner) && targetTabId) {
       setTabs((current) =>
         current.map((tab) =>
-          tab.id === owner.tabId && tab.loading
+          tab.id === targetTabId && tab.loading
             ? { ...tab, loading: false, runState: opts?.state ?? "stopped", runLabel: opts?.label ?? "Detenido" }
             : tab
         )
       );
     }
-    return hadStream;
+    return hadStream || Boolean(owner);
   }, [setCurrentStreamOwner]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -1805,14 +1803,14 @@ export function App() {
               onToggleExpand={() => setLogsExpanded((value) => !value)}
               onCopy={copyToClipboard}
               onBack={() => {
-                const owner = streamOwnerRef.current;
-                if (owner?.tabId === activeTab.id && owner.autoStopOnLeave) {
-                  stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido al volver" });
+                const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Logs detenidos al volver" });
+                if (!stopped && activeTab.loading) {
+                  updateActiveTab({ loading: false, runState: "stopped", runLabel: "Logs detenidos al volver" });
                 }
                 setViewMode("table");
               }}
               onResume={() => runLogs()}
-              onStop={stopStream}
+              onStop={() => stopStream({ tabId: activeTab.id, state: "stopped", label: "Logs detenidos" })}
             />
           )}
 
@@ -1824,7 +1822,7 @@ export function App() {
               streaming={streaming}
               onChange={(terminalCommand) => updateActiveTab({ terminalCommand })}
               onRun={runTerminal}
-              onStop={stopStream}
+              onStop={() => stopStream({ tabId: activeTab.id, state: "stopped", label: "Terminal detenida" })}
               onCopy={copyToClipboard}
             />
           )}
@@ -2588,6 +2586,17 @@ const LOG_LEVEL_FILTERS: Array<{ value: LogLevelFilter; label: string }> = [
   { value: "OTHER", label: "Otros" }
 ];
 
+function emptyLevelCounts(): Record<LogLevelFilter, number> {
+  return {
+    ERROR: 0,
+    WARN: 0,
+    INFO: 0,
+    DEBUG: 0,
+    TRACE: 0,
+    OTHER: 0
+  };
+}
+
 const SINCE_OPTIONS: { label: string; value: string }[] = [
   { label: "Todo", value: "" },
   { label: "1 min", value: "1m" },
@@ -2689,6 +2698,8 @@ function LogsPanel({
   const [detailHeight, setDetailHeight] = useState(180);
   const [detailTab, setDetailTab] = useState<"message" | "json" | "raw" | "fields">("message");
   const [activeLevelFilters, setActiveLevelFilters] = useState<LogLevelFilter[]>([]);
+  const [levelCounts, setLevelCounts] = useState<Record<LogLevelFilter, number>>(() => emptyLevelCounts());
+  const [levelCountsReady, setLevelCountsReady] = useState(true);
   const [followTail, setFollowTail] = useState(true);
   const [atBottom, setAtBottom] = useState(true);
 
@@ -2704,6 +2715,12 @@ function LogsPanel({
 
   // Cache de parseo: cada linea se parsea una sola vez (no en cada render).
   const parseCache = useRef<Map<string, ParsedLog>>(new Map());
+  const levelCountRef = useRef<{
+    length: number;
+    first: string;
+    last: string;
+    counts: Record<LogLevelFilter, number>;
+  } | null>(null);
   const getParsed = useCallback((line: string) => {
     const cache = parseCache.current;
     let entry = cache.get(line);
@@ -2730,19 +2747,6 @@ function LogsPanel({
   const endMin = start || undefined;
   const endMax = start ? minLocal(toLocalInputValue(new Date(new Date(start).getTime() + rangeMs)), nowLocal) : nowLocal;
 
-  const levelCounts = useMemo(() => {
-    const counts: Record<LogLevelFilter, number> = {
-      ERROR: 0,
-      WARN: 0,
-      INFO: 0,
-      DEBUG: 0,
-      TRACE: 0,
-      OTHER: 0
-    };
-    for (const line of lines) counts[levelBucket(getParsed(line).level)]++;
-    return counts;
-  }, [lines, getParsed]);
-
   const activeLevelSet = useMemo(() => new Set(activeLevelFilters), [activeLevelFilters]);
   const displayIndexes = useMemo(() => {
     if (!activeLevelSet.size) return lines.map((_, index) => index);
@@ -2752,6 +2756,59 @@ function LogsPanel({
     }
     return result;
   }, [lines, activeLevelSet, getParsed]);
+
+  useEffect(() => {
+    if (!pretty) {
+      setLevelCounts(emptyLevelCounts());
+      setLevelCountsReady(true);
+      levelCountRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    const previous = levelCountRef.current;
+    const canContinue =
+      previous &&
+      previous.length > 0 &&
+      previous.length <= lines.length &&
+      lines[0] === previous.first &&
+      lines[previous.length - 1] === previous.last;
+    const counts = canContinue ? { ...previous.counts } : emptyLevelCounts();
+    const first = lines[0] ?? "";
+    let index = 0;
+    let timer = 0;
+
+    if (canContinue) index = previous.length;
+    setLevelCounts({ ...counts });
+    setLevelCountsReady(index >= lines.length);
+
+    const step = () => {
+      const limit = Math.min(lines.length, index + 1200);
+      for (; index < limit; index++) {
+        counts[levelBucket(getParsed(lines[index]).level)]++;
+      }
+      if (cancelled) return;
+
+      levelCountRef.current = {
+        length: index,
+        first,
+        last: lines[index - 1] ?? "",
+        counts: { ...counts }
+      };
+      setLevelCounts({ ...counts });
+      if (index < lines.length) {
+        timer = window.setTimeout(step, 0);
+      } else {
+        setLevelCountsReady(true);
+      }
+    };
+
+    timer = window.setTimeout(step, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [lines, pretty, getParsed]);
 
   const matches = useMemo(() => {
     const needle = term.toLowerCase();
@@ -2972,19 +3029,19 @@ function LogsPanel({
             <>
               <button
                 className={`toolbar-button ${followTail ? "active" : ""}`}
-                title={followTail ? "Pausar seguimiento" : "Seguir al final"}
+                title={followTail ? "Auto-scroll activo: no detiene kubectl logs" : "Scroll manual: volver al final sin detener logs"}
                 disabled={!lines.length}
                 onClick={() => {
                   if (followTail) setFollowTail(false);
                   else scrollToBottom();
                 }}
               >
-                {followTail ? <Pause size={16} /> : <Play size={16} />}
-                {followTail ? "Siguiendo" : "Pausado"}
+                {followTail ? <ChevronDown size={16} /> : <Play size={16} />}
+                {followTail ? "Auto-scroll" : "Scroll manual"}
               </button>
-              <button className="toolbar-button" title="Ir al final" disabled={!lines.length || atBottom} onClick={scrollToBottom}>
+              <button className="toolbar-button" title="Ir al final del log" disabled={!lines.length || atBottom} onClick={scrollToBottom}>
                 <ChevronDown size={16} />
-                Final
+                Ir al final
               </button>
             </>
           )}
@@ -2995,7 +3052,7 @@ function LogsPanel({
               onClick={() => onPinnedChange(!pinned)}
             >
               <Pin size={16} />
-              {pinned ? "Fijado" : "Fijar"}
+              {pinned ? "En 2º plano" : "2º plano"}
             </button>
           )}
           <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
@@ -3019,15 +3076,15 @@ function LogsPanel({
           )}
           {mode === "live" &&
             (streaming && onStop ? (
-              <button className="toolbar-button danger" onClick={onStop}>
+              <button className="toolbar-button danger" title="Cancelar kubectl logs en ejecucion" onClick={onStop}>
                 <Square size={16} />
-                Detener
+                Detener logs
               </button>
             ) : (
               onResume && (
-                <button className="toolbar-button accent" onClick={onResume}>
+                <button className="toolbar-button accent" title="Volver a ejecutar kubectl logs" onClick={onResume}>
                   <RefreshCw size={16} />
-                  Refrescar
+                  Recargar logs
                 </button>
               )
             ))}
@@ -3062,8 +3119,8 @@ function LogsPanel({
                 key={filter.value}
                 className={`logs-filter-chip ${activeLevelSet.has(filter.value) ? "active" : ""}`}
                 onClick={() => toggleLevelFilter(filter.value)}
-                disabled={!levelCounts[filter.value]}
-                title={`${levelCounts[filter.value].toLocaleString()} líneas`}
+                disabled={!activeLevelSet.has(filter.value) && (!levelCountsReady || !levelCounts[filter.value])}
+                title={levelCountsReady ? `${levelCounts[filter.value].toLocaleString()} líneas` : "Calculando niveles..."}
               >
                 {filter.label}
                 <span>{levelCounts[filter.value].toLocaleString()}</span>
@@ -3073,6 +3130,7 @@ function LogsPanel({
         )}
         <div className="logs-summary">
           <span>{lineSummary}</span>
+          {pretty && !levelCountsReady && lines.length > 0 && <span>Analizando niveles...</span>}
           {meta?.target && <span>{meta.target}</span>}
           {meta?.truncated && <strong>Truncado a {meta.cap.toLocaleString()}</strong>}
         </div>

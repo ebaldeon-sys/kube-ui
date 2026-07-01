@@ -48,6 +48,7 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
 const STREAM_CHANNEL = "kubectl:stream:event";
 const activeStreams = new Map<string, ReturnType<typeof spawn>>();
+const stoppedStreams = new Set<string>();
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -454,6 +455,7 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
     args = request.command !== undefined ? parseCommandLine(request.command) : request.args ?? [];
     if (!args.length) throw new Error("Ingresa un comando kubectl.");
   } catch (error) {
+    stoppedStreams.delete(streamId);
     event.sender.send(STREAM_CHANNEL, {
       streamId,
       type: "end",
@@ -470,6 +472,11 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
     namespace: request.namespace
   });
   const command = ["kubectl", ...fullArgs].map(quoteForDisplay).join(" ");
+
+  if (stoppedStreams.delete(streamId)) {
+    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code: null, command });
+    return { streamId, command };
+  }
 
   const env = { ...process.env };
   if (request.kubeconfigPaths?.length) {
@@ -504,6 +511,9 @@ ipcMain.handle("kubectl:streamStop", (_event, streamId: string) => {
   if (child) {
     child.kill();
     activeStreams.delete(streamId);
+  } else {
+    stoppedStreams.add(streamId);
+    setTimeout(() => stoppedStreams.delete(streamId), 30_000);
   }
   return true;
 });
@@ -513,4 +523,5 @@ app.on("before-quit", () => {
     child.kill();
   }
   activeStreams.clear();
+  stoppedStreams.clear();
 });
