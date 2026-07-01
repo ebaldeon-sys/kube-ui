@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 const STREAM_CHANNEL = "kubectl:stream:event";
 const makeStreamId = () => `stream_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -14,7 +14,7 @@ const api = {
   applyYaml: (request: unknown) => ipcRenderer.invoke("kubectl:applyYaml", request),
   replaceYaml: (request: unknown) => ipcRenderer.invoke("kubectl:replaceYaml", request),
   pickYamlFile: () => ipcRenderer.invoke("kubectl:pickYamlFile"),
-  writeClipboard: (text: string) => clipboard.writeText(text),
+  writeClipboard: (text: string) => ipcRenderer.invoke("app:writeClipboard", text),
   streamKubectl: (
     request: unknown,
     handlers: { onData: (chunk: string) => void; onEnd: (result: { code: number | null; error?: string; command: string }) => void }
@@ -36,7 +36,7 @@ const api = {
     });
     return () => {
       ipcRenderer.removeListener(STREAM_CHANNEL, listener);
-      ipcRenderer.invoke("kubectl:streamStop", streamId);
+      ipcRenderer.invoke("kubectl:streamStop", streamId).catch(() => undefined);
     };
   }
 };

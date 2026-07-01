@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -352,6 +352,11 @@ ipcMain.handle("settings:inspectKubeconfigs", async () => {
 
 ipcMain.handle("settings:revealKubeconfig", async (_event, kubeconfigPath: string) => {
   shell.showItemInFolder(kubeconfigPath);
+  return true;
+});
+
+ipcMain.handle("app:writeClipboard", async (_event, text: string) => {
+  clipboard.writeText(String(text ?? ""));
   return true;
 });
 

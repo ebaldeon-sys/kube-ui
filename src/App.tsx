@@ -542,7 +542,7 @@ export function App() {
   const copyToClipboard = useCallback(async (text: string, label = "Texto") => {
     if (!text.trim()) return;
     try {
-      window.kubeui.writeClipboard(text);
+      await window.kubeui.writeClipboard(text);
       setGlobalMessage(`${label} copiado al portapapeles.`);
     } catch (error) {
       setGlobalMessage(`No se pudo copiar: ${unknownMessage(error)}`);

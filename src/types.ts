@@ -60,7 +60,7 @@ export type kubeuiApi = {
     namespace?: string;
   }) => Promise<KubectlResult>;
   pickYamlFile: () => Promise<PickedYamlFile | null>;
-  writeClipboard: (text: string) => void;
+  writeClipboard: (text: string) => Promise<boolean>;
   streamKubectl: (
     request: {
       args?: string[];
