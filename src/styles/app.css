@@ -91,7 +91,7 @@ button:disabled {
   gap: 6px;
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 .chrome-tab {
@@ -99,9 +99,10 @@ button:disabled {
   align-items: center;
   gap: 8px;
   height: 34px;
+  min-width: 70px;
   max-width: 220px;
   padding: 0 12px;
-  flex: 0 0 auto;
+  flex: 1 1 180px;
   color: #aeb9cc;
   background: #1c2638;
   border-radius: 8px 8px 0 0;
@@ -110,6 +111,10 @@ button:disabled {
 
 .chrome-tab:hover {
   background: #243149;
+}
+
+.chrome-tab > svg {
+  flex: 0 0 auto;
 }
 
 .chrome-tab span {
@@ -657,6 +662,25 @@ tbody tr {
 tbody tr:hover,
 tbody tr.selected {
   background: #eef5ff;
+}
+
+tbody tr.checked:not(.selected) {
+  background: #f5f8ff;
+}
+
+.selection-cell {
+  width: 38px;
+  min-width: 38px;
+  padding: 0 10px;
+  text-align: center;
+}
+
+.selection-cell input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #246bfe;
+  cursor: pointer;
 }
 
 .empty-state {
@@ -1474,12 +1498,15 @@ body {
 
 .tabstrip-tabs {
   gap: 5px;
+  overflow: hidden;
 }
 
 .chrome-tab {
   height: 34px;
+  min-width: 70px;
   max-width: 240px;
   padding: 0 11px;
+  flex: 1 1 180px;
   color: #aebbd0;
   background: #17243a;
   border: 1px solid #263750;

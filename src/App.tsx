@@ -80,6 +80,7 @@ type KubeItem = {
 type ResourceSnapshot = {
   rows: KubeItem[];
   selectedName: string;
+  selectedNames: string[];
   viewMode: ViewMode;
   outputTitle: string;
   output: string;
@@ -94,6 +95,7 @@ type TabSession = {
   resource: ResourceKey;
   rows: KubeItem[];
   selectedName: string;
+  selectedNames: string[];
   viewMode: ViewMode;
   outputTitle: string;
   output: string;
@@ -365,6 +367,7 @@ const LOG_FLUSH_MS = 60;
 const LOG_ROW_H = 24;
 const LOG_OVERSCAN = 12;
 const ALL_LOG_CONTAINERS = "__all__";
+const MAX_TABS = 12;
 
 // Timestamp que antepone `kubectl logs --timestamps` (RFC3339).
 const K8S_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s+/;
@@ -487,6 +490,13 @@ function unknownMessage(error: unknown): string {
 
 function kubectlOutput(result: KubectlResult, fallback: string) {
   return result.stderr.trim() || result.stdout.trim() || fallback;
+}
+
+function kubectlSuccessText(result: KubectlResult, fallback = "Comando ejecutado correctamente sin salida.") {
+  const body = result.stdout.trim() || result.stderr.trim();
+  if (body) return body;
+  const code = result.code === null ? "" : `\n\nExit code: ${result.code}`;
+  return `${fallback}${code}`;
 }
 
 function kubectlErrorText(result: KubectlResult, fallback: string) {
@@ -745,7 +755,7 @@ export function App() {
       return current.map((tab) =>
         nextContexts.includes(tab.context)
           ? tab
-          : { ...tab, context: nextContexts[0], title: nextContexts[0], namespace: nsMap[nextContexts[0]] ?? "default", rows: [], selectedName: "" }
+          : { ...tab, context: nextContexts[0], title: nextContexts[0], namespace: nsMap[nextContexts[0]] ?? "default", rows: [], selectedName: "", selectedNames: [] }
       );
     });
   }, [kubeconfigPaths, showAppError]);
@@ -803,7 +813,7 @@ export function App() {
         setTabs((current) =>
           current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
         );
-      updateTab(tab.id, { loading: true, runState: "running", runLabel: `Cargando ${config.label}`, output: "", outputTitle: "", rows: [], selectedName: "" });
+      updateTab(tab.id, { loading: true, runState: "running", runLabel: `Cargando ${config.label}`, output: "", outputTitle: "", rows: [], selectedName: "", selectedNames: [] });
       let result: KubectlResult;
       try {
         result = await window.kubeui.runKubectl({
@@ -845,7 +855,7 @@ export function App() {
         });
         return;
       }
-      applyIfCurrent({ rows: items, selectedName: "", loading: false, runState: "done", runLabel: `${config.label} cargados`, lastCommand: result.command });
+      applyIfCurrent({ rows: items, selectedName: "", selectedNames: [], loading: false, runState: "done", runLabel: `${config.label} cargados`, lastCommand: result.command });
     },
     [isLoadCurrent, kubeconfigPaths, nextLoadToken]
   );
@@ -961,7 +971,7 @@ export function App() {
     const next = namespaceDraft.trim() || "default";
     if (next !== activeTab.namespace) {
       const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
-      updateActiveTab({ namespace: next, rows: [], selectedName: "", runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
+      updateActiveTab({ namespace: next, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
     } else if (next !== namespaceDraft) {
       setNamespaceDraft(next);
     }
@@ -976,6 +986,24 @@ export function App() {
     stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido al refrescar" });
     setViewMode("table");
     await loadResources(activeTab);
+  };
+
+  const togglePodSelection = (name: string) => {
+    if (!activeTab || activeTab.resource !== "pods") return;
+    const selected = new Set(activeTab.selectedNames);
+    if (selected.has(name)) selected.delete(name);
+    else selected.add(name);
+    updateActiveTab({ selectedNames: Array.from(selected) });
+  };
+
+  const setPodSelection = (names: string[], checked: boolean) => {
+    if (!activeTab || activeTab.resource !== "pods") return;
+    const selected = new Set(activeTab.selectedNames);
+    for (const name of names) {
+      if (checked) selected.add(name);
+      else selected.delete(name);
+    }
+    updateActiveTab({ selectedNames: Array.from(selected) });
   };
 
   // Interrumpe la accion en curso: descarta el resultado en vuelo (via token),
@@ -1016,7 +1044,7 @@ export function App() {
       runState: result.ok ? "done" : "error",
       runLabel: result.ok ? title : `Error: ${title}`,
       outputTitle: result.ok ? title : `Error: ${title}`,
-      output: result.ok ? result.stdout : kubectlErrorText(result, "El comando fallo."),
+      output: result.ok ? kubectlSuccessText(result) : kubectlErrorText(result, "El comando fallo."),
       lastCommand: result.command
     });
     return result;
@@ -1248,6 +1276,10 @@ export function App() {
   };
 
   const addTab = () => {
+    if (tabs.length >= MAX_TABS) {
+      setGlobalMessage(`Puedes abrir hasta ${MAX_TABS} pestañas. Cierra una pestaña antes de crear otra.`);
+      return;
+    }
     const context = contexts[0] ?? "";
     if (!context) return;
     const tab = createTab(context, contextNamespaces[context]);
@@ -1304,19 +1336,32 @@ export function App() {
   };
 
   const restartResource = async () => {
-    if (!activeTab || !selectedName) return;
+    if (!activeTab) return;
     const tab = activeTab;
     const kind = activeTab.resource;
     let args: string[];
+    let title: string;
+    let confirmMessage: string;
     if (kind === "pods") {
-      args = ["delete", "pod", selectedName];
+      const rowNames = new Set(activeTab.rows.map(nameOf).filter(Boolean));
+      const selectedPods = activeTab.selectedNames.filter((name) => rowNames.has(name));
+      const targets = selectedPods.length ? selectedPods : selectedName ? [selectedName] : [];
+      if (!targets.length) return;
+      args = ["delete", "pod", ...targets];
+      title = targets.length > 1 ? `Reiniciar ${targets.length} pods` : `Reiniciar ${targets[0]}`;
+      const preview = targets.slice(0, 5).join(", ");
+      const suffix = targets.length > 5 ? ` y ${targets.length - 5} más` : "";
+      confirmMessage = targets.length > 1 ? `Reiniciar ${targets.length} pods seleccionados (${preview}${suffix})?` : `Reiniciar ${targets[0]}?`;
     } else if (kind === "deployments" || kind === "statefulsets" || kind === "daemonsets") {
+      if (!selectedName) return;
       args = ["rollout", "restart", selectedConfig.kubectlName, selectedName];
+      title = `Reiniciar ${selectedName}`;
+      confirmMessage = `Reiniciar ${selectedName}?`;
     } else {
       return;
     }
-    if (!(await requestConfirm(`Reiniciar ${selectedName}?`))) return;
-    const result = await showOutput("details", args, `Reiniciar ${selectedName}`);
+    if (!(await requestConfirm(confirmMessage))) return;
+    const result = await showOutput("details", args, title);
     if (result?.ok) await loadResources(tab);
   };
 
@@ -1485,7 +1530,7 @@ export function App() {
       runState: result.ok ? "done" : "error",
       runLabel: result.ok ? (editMode ? "Recurso editado" : "YAML aplicado") : `Error: ${editMode ? "Editar recurso" : "Aplicar YAML"}`,
       outputTitle: result.ok ? (editMode ? "Editar recurso" : "Aplicar YAML") : `Error: ${editMode ? "Editar recurso" : "Aplicar YAML"}`,
-      output: result.ok ? result.stdout : kubectlErrorText(result, "No se pudo aplicar el YAML."),
+      output: result.ok ? kubectlSuccessText(result) : kubectlErrorText(result, "No se pudo aplicar el YAML."),
       lastCommand: result.command
     });
   };
@@ -1542,7 +1587,12 @@ export function App() {
               )}
             </div>
           ))}
-          <button className="tabstrip-add" title={contexts.length ? "Nueva pestaña" : "Agrega un kubeconfig con contextos"} onClick={addTab} disabled={!contexts.length}>
+          <button
+            className="tabstrip-add"
+            title={!contexts.length ? "Agrega un kubeconfig con contextos" : tabs.length >= MAX_TABS ? `Límite de ${MAX_TABS} pestañas` : "Nueva pestaña"}
+            onClick={addTab}
+            disabled={!contexts.length || tabs.length >= MAX_TABS}
+          >
             <Plus size={16} />
           </button>
         </div>
@@ -1577,6 +1627,7 @@ export function App() {
                           const snapshot: ResourceSnapshot = {
                             rows: activeTab.rows,
                             selectedName: activeTab.selectedName,
+                            selectedNames: activeTab.selectedNames,
                             viewMode: activeTab.viewMode === "apply" ? "table" : activeTab.viewMode,
                             outputTitle: activeTab.outputTitle,
                             output: activeTab.output,
@@ -1592,6 +1643,7 @@ export function App() {
                               resourceCache: { ...tab.resourceCache, [activeTab.resource]: snapshot },
                               rows: cached?.rows ?? [],
                               selectedName: cached?.selectedName ?? "",
+                              selectedNames: cached?.selectedNames ?? [],
                               viewMode: restoredViewMode,
                               outputTitle: cached?.outputTitle ?? "",
                               output: cached?.output ?? "",
@@ -1647,6 +1699,7 @@ export function App() {
                         namespace: contextNamespaces[nextContext] ?? "default",
                         rows: [],
                         selectedName: "",
+                        selectedNames: [],
                         title: nextContext || "Sin contexto",
                         runState: stopped ? "stopped" : "idle",
                         runLabel: stopped ? "Detenido por cambio de contexto" : ""
@@ -1680,7 +1733,7 @@ export function App() {
                       setNamespaceDraft(value);
                       if (namespaces.includes(value) && value !== activeTab.namespace) {
                         const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
-                        updateActiveTab({ namespace: value, rows: [], selectedName: "", runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
+                        updateActiveTab({ namespace: value, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
                       }
                     }}
                     onKeyDown={(event) => {
@@ -1750,6 +1803,8 @@ export function App() {
               config={selectedConfig}
               onRefresh={refreshResources}
               onSelect={(name) => updateActiveTab({ selectedName: name })}
+              onTogglePodSelection={togglePodSelection}
+              onSetPodSelection={setPodSelection}
               onDescribe={() => selectedName && showOutput("details", ["describe", selectedConfig.kubectlName, selectedName], `Describe ${selectedName}`)}
               onYaml={() => selectedName && showOutput("yaml", ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], `YAML ${selectedName}`)}
               onLogs={() => selectedName && runLogs()}
@@ -2154,6 +2209,8 @@ function ResourceTable({
   config,
   onRefresh,
   onSelect,
+  onTogglePodSelection,
+  onSetPodSelection,
   onDescribe,
   onYaml,
   onLogs,
@@ -2168,6 +2225,8 @@ function ResourceTable({
   config: ResourceConfig;
   onRefresh: () => void;
   onSelect: (name: string) => void;
+  onTogglePodSelection: (name: string) => void;
+  onSetPodSelection: (names: string[], checked: boolean) => void;
   onDescribe: () => void;
   onYaml: () => void;
   onLogs: () => void;
@@ -2180,10 +2239,16 @@ function ResourceTable({
 }) {
   const selected = Boolean(tab.selectedName);
   const busy = tab.loading;
+  const isPodTable = config.key === "pods";
+  const selectedPodSet = useMemo(() => new Set(isPodTable ? tab.selectedNames : []), [isPodTable, tab.selectedNames]);
+  const multiPodSelection = isPodTable && selectedPodSet.size > 1;
+  const restartEnabled = isPodTable ? selected || selectedPodSet.size > 0 : selected;
+  const singleActionEnabled = selected && !multiPodSelection;
   const selectedRow = tab.rows.find((item) => nameOf(item) === tab.selectedName);
   const cronSuspended = Boolean((selectedRow?.spec as { suspend?: boolean })?.suspend);
   const loadError = tab.outputTitle.startsWith("Error") && tab.output.trim();
   const [filter, setFilter] = useState("");
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const needle = filter.trim().toLowerCase();
   const filteredRows = useMemo(() => {
     if (!needle) return tab.rows;
@@ -2200,63 +2265,74 @@ function ResourceTable({
       return haystack.includes(needle);
     });
   }, [tab.rows, config.columns, needle]);
+  const filteredPodNames = useMemo(() => (isPodTable ? filteredRows.map(nameOf).filter(Boolean) : []), [filteredRows, isPodTable]);
+  const visibleSelectedCount = filteredPodNames.filter((name) => selectedPodSet.has(name)).length;
+  const allVisiblePodsSelected = filteredPodNames.length > 0 && visibleSelectedCount === filteredPodNames.length;
+  const someVisiblePodsSelected = visibleSelectedCount > 0 && !allVisiblePodsSelected;
+  const countText = needle ? `${filteredRows.length} de ${tab.rows.length} recursos` : `${tab.rows.length} recursos`;
+  const selectionText = isPodTable && selectedPodSet.size > 0 ? ` · ${selectedPodSet.size} seleccionados` : "";
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someVisiblePodsSelected;
+  }, [someVisiblePodsSelected]);
+
   return (
     <div className="table-panel">
       <div className="panel-title">
         <div>
           <h1>{config.label}</h1>
-          <p>{needle ? `${filteredRows.length} de ${tab.rows.length} recursos` : `${tab.rows.length} recursos`}</p>
+          <p>{countText}{selectionText}</p>
         </div>
         <div className="button-row">
           <button className="toolbar-button" onClick={onRefresh} disabled={busy}>
             <RefreshCw size={16} />
             Refrescar
           </button>
-          <button className="toolbar-button" onClick={onDescribe} disabled={!selected || busy}>
+          <button className="toolbar-button" onClick={onDescribe} disabled={!singleActionEnabled || busy}>
             <ScrollText size={16} />
             Describir
           </button>
-          <button className="toolbar-button" onClick={onYaml} disabled={!selected || busy}>
+          <button className="toolbar-button" onClick={onYaml} disabled={!singleActionEnabled || busy}>
             <FileCode2 size={16} />
             YAML
           </button>
           {config.key === "pods" && (
-            <button className="toolbar-button" onClick={onLogs} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onLogs} disabled={!singleActionEnabled || busy}>
               <SquareTerminal size={16} />
               Logs
             </button>
           )}
           {config.key === "cronjobs" && (
-            <button className="toolbar-button" onClick={onTrigger} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onTrigger} disabled={!singleActionEnabled || busy}>
               <Play size={16} />
               Ejecutar
             </button>
           )}
           {config.key === "cronjobs" && (
-            <button className="toolbar-button" onClick={onSuspend} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onSuspend} disabled={!singleActionEnabled || busy}>
               <Pause size={16} />
               {cronSuspended ? "Reanudar" : "Suspender"}
             </button>
           )}
           {(config.key === "pods" || config.key === "deployments" || config.key === "statefulsets" || config.key === "daemonsets") && (
-            <button className="toolbar-button" onClick={onRestart} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onRestart} disabled={!restartEnabled || busy}>
               <RotateCcw size={16} />
-              Reiniciar
+              {isPodTable && selectedPodSet.size > 1 ? `Reiniciar (${selectedPodSet.size})` : "Reiniciar"}
             </button>
           )}
           {(config.key === "deployments" || config.key === "statefulsets" || config.key === "replicasets") && (
-            <button className="toolbar-button" onClick={onScale} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onScale} disabled={!singleActionEnabled || busy}>
               <Scale3D size={16} />
               Escalar
             </button>
           )}
           {config.editable !== false && (
-            <button className="toolbar-button" onClick={onEdit} disabled={!selected || busy}>
+            <button className="toolbar-button" onClick={onEdit} disabled={!singleActionEnabled || busy}>
               <Pencil size={16} />
               Editar
             </button>
           )}
-          <button className="toolbar-button danger" onClick={onDelete} disabled={!selected || busy}>
+          <button className="toolbar-button danger" onClick={onDelete} disabled={!singleActionEnabled || busy}>
             <Trash2 size={16} />
             Eliminar
           </button>
@@ -2276,11 +2352,23 @@ function ResourceTable({
           </button>
         )}
       </div>
-      <div className={`resource-table-body ${selectedRow ? "with-inspector" : ""}`}>
+      <div className={`resource-table-body ${selectedRow && !multiPodSelection ? "with-inspector" : ""}`}>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                {isPodTable && (
+                  <th className="selection-cell">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allVisiblePodsSelected}
+                      disabled={busy || !filteredPodNames.length}
+                      title="Seleccionar pods visibles"
+                      onChange={(event) => onSetPodSelection(filteredPodNames, event.target.checked)}
+                    />
+                  </th>
+                )}
                 {config.columns.map((column) => (
                   <th key={column.key}>{column.label}</th>
                 ))}
@@ -2289,8 +2377,24 @@ function ResourceTable({
             <tbody>
               {filteredRows.map((item) => {
                 const name = nameOf(item);
+                const checked = selectedPodSet.has(name);
                 return (
-                  <tr key={name} className={tab.selectedName === name ? "selected" : ""} onClick={() => onSelect(name)}>
+                  <tr
+                    key={name}
+                    className={`${tab.selectedName === name ? "selected" : ""}${checked ? " checked" : ""}`}
+                    onClick={() => onSelect(name)}
+                  >
+                    {isPodTable && (
+                      <td className="selection-cell" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={busy}
+                          title={`Seleccionar ${name}`}
+                          onChange={() => onTogglePodSelection(name)}
+                        />
+                      </td>
+                    )}
                     {config.columns.map((column) => (
                       <td key={column.key}>{renderTableCell(column.key, column.getter(item))}</td>
                     ))}
@@ -2299,7 +2403,7 @@ function ResourceTable({
               })}
               {!filteredRows.length && (
                 <tr>
-                  <td colSpan={config.columns.length} className="empty-state">
+                  <td colSpan={config.columns.length + (isPodTable ? 1 : 0)} className="empty-state">
                     {loadError ? (
                       <div className="table-error">
                         <AlertTriangle size={22} />
@@ -2328,7 +2432,7 @@ function ResourceTable({
             </tbody>
           </table>
         </div>
-        {selectedRow && (
+        {selectedRow && !multiPodSelection && (
           <ResourceInspector
             item={selectedRow}
             config={config}
@@ -3429,6 +3533,7 @@ function createTab(context: string, namespace?: string): TabSession {
     resource: "pods",
     rows: [],
     selectedName: "",
+    selectedNames: [],
     viewMode: "table",
     outputTitle: "",
     output: "",
