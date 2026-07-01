@@ -67,6 +67,7 @@ type KubeItem = {
     namespace?: string;
     creationTimestamp?: string;
     labels?: Record<string, string>;
+    annotations?: Record<string, string>;
   };
   status?: Record<string, unknown>;
   spec?: Record<string, unknown>;
@@ -327,6 +328,16 @@ const RESOURCE_CATEGORIES: Array<{ label: string; keys: ResourceKey[] }> = [
 
 type LogsMode = "live" | "query";
 
+type LogsMeta = {
+  cap: number;
+  truncated: boolean;
+  error: string;
+  command: string;
+  target: string;
+};
+
+type LogLevelFilter = "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" | "OTHER";
+
 // Modo Live (-f): el log crece para siempre, asi que mantenemos un ring buffer.
 const MAX_LIVE_LINES = 5000;
 // Modo Consulta (historico): cargamos toda la ventana, con un tope de seguridad.
@@ -339,6 +350,7 @@ const LOG_FLUSH_MS = 150;
 // Virtualizacion: alto fijo de cada fila (px) y filas extra fuera de viewport.
 const LOG_ROW_H = 24;
 const LOG_OVERSCAN = 12;
+const ALL_LOG_CONTAINERS = "__all__";
 
 // Timestamp que antepone `kubectl logs --timestamps` (RFC3339).
 const K8S_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s+/;
@@ -352,14 +364,14 @@ function lineEpoch(line: string): number | null {
 }
 
 // Conserva solo las ultimas `max` lineas del texto recibido.
-function capLines(text: string, max: number) {
+function capLines(text: string, max: number): { text: string; truncated: boolean } {
   let newlines = 0;
   for (let i = 0; i < text.length; i++) {
     if (text.charCodeAt(i) === 10) newlines++;
   }
-  if (newlines <= max) return text;
+  if (newlines <= max) return { text, truncated: false };
   const lines = text.split("\n");
-  return lines.slice(lines.length - max).join("\n");
+  return { text: lines.slice(lines.length - max).join("\n"), truncated: true };
 }
 
 // Valor para <input type="datetime-local"> a partir de una fecha (hora local).
@@ -372,9 +384,12 @@ function toLocalInputValue(date: Date) {
 // Devuelve tambien el epoch de corte final (kubectl no soporta "--until").
 function buildLogsArgs(
   name: string,
-  opts: { mode: LogsMode; since: string; start: string; end: string }
+  opts: { mode: LogsMode; since: string; start: string; end: string; container?: string; allContainers?: boolean; previous?: boolean }
 ): { args: string[]; startEpoch: number | null; endEpoch: number | null; follow: boolean } {
   const args = ["logs", "--timestamps"];
+  if (opts.previous) args.push("--previous");
+  if (opts.allContainers) args.push("--all-containers=true");
+  else if (opts.container) args.push("-c", opts.container);
   if (opts.mode === "live") {
     if (opts.since) {
       // Preset (1m, 5m, ...): seguimiento continuo en vivo.
@@ -416,6 +431,40 @@ function formatKubectlCommand(args: string[], context?: string, namespace?: stri
   return ["kubectl", ...full]
     .map((value) => (/^[A-Za-z0-9_./:=@-]+$/.test(value) ? value : JSON.stringify(value)))
     .join(" ");
+}
+
+function podContainerNames(item?: KubeItem): string[] {
+  const spec = item?.spec as
+    | {
+        containers?: Array<{ name?: string }>;
+        initContainers?: Array<{ name?: string }>;
+        ephemeralContainers?: Array<{ name?: string }>;
+      }
+    | undefined;
+  const names = [
+    ...(spec?.containers ?? []),
+    ...(spec?.initContainers ?? []),
+    ...(spec?.ephemeralContainers ?? [])
+  ]
+    .map((container) => container.name)
+    .filter((name): name is string => Boolean(name));
+  return Array.from(new Set(names));
+}
+
+function defaultLogContainer(item?: KubeItem): string {
+  const names = podContainerNames(item);
+  const annotated = item?.metadata?.annotations?.["kubectl.kubernetes.io/default-container"];
+  if (annotated && names.includes(annotated)) return annotated;
+  const sidecars = new Set(["istio-proxy", "linkerd-proxy", "vault-agent", "envoy", "cloud-sql-proxy", "oauth2-proxy"]);
+  return names.find((name) => !sidecars.has(name)) ?? names[0] ?? "";
+}
+
+function resolveLogContainer(item: KubeItem | undefined, requested: string) {
+  const names = podContainerNames(item);
+  if (names.length <= 1) return "";
+  if (requested === ALL_LOG_CONTAINERS) return ALL_LOG_CONTAINERS;
+  if (requested && names.includes(requested)) return requested;
+  return defaultLogContainer(item);
 }
 
 function unknownMessage(error: unknown): string {
@@ -463,6 +512,15 @@ export function App() {
   const [logsStart, setLogsStart] = useState("");
   const [logsEnd, setLogsEnd] = useState("");
   const [logsNotice, setLogsNotice] = useState("");
+  const [logsContainer, setLogsContainer] = useState("");
+  const [logsPrevious, setLogsPrevious] = useState(false);
+  const [logsMeta, setLogsMeta] = useState<LogsMeta>({
+    cap: MAX_LIVE_LINES,
+    truncated: false,
+    error: "",
+    command: "",
+    target: ""
+  });
   // Vista ampliada de logs: oculta tabstrip, sidebar, barra de sesion y statusbar.
   const [logsExpanded, setLogsExpanded] = useState(false);
   // Vista a la que regresar al cerrar la configuracion (kubeconfig).
@@ -525,6 +583,11 @@ export function App() {
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const viewMode: ViewMode = activeTab?.viewMode ?? fallbackViewMode;
   const kubeconfigPaths = useMemo(() => settings?.kubeconfigPaths ?? [], [settings]);
+  const selectedName = activeTab?.selectedName ?? "";
+  const selectedConfig = activeTab ? configByKey[activeTab.resource] : resourceConfigs[0];
+  const selectedPod = activeTab?.resource === "pods" ? activeTab.rows.find((item) => nameOf(item) === activeTab.selectedName) : undefined;
+  const logContainerNames = useMemo(() => podContainerNames(selectedPod), [selectedPod]);
+  const logDefaultContainer = useMemo(() => defaultLogContainer(selectedPod), [selectedPod]);
 
   const run = useCallback(
     (tab: TabSession | undefined, args: string[], namespaceOverride?: string) =>
@@ -758,6 +821,19 @@ export function App() {
     setNamespaceDraft(activeTab?.namespace ?? "");
   }, [activeTab?.id, activeTab?.namespace]);
 
+  useEffect(() => {
+    setLogsContainer("");
+    setLogsPrevious(false);
+    setLogsNotice("");
+    setLogsMeta({
+      cap: MAX_LIVE_LINES,
+      truncated: false,
+      error: "",
+      command: "",
+      target: ""
+    });
+  }, [activeTab?.id, activeTab?.selectedName]);
+
   // Detener cualquier streaming activo al cerrar la app.
   useEffect(() => () => stopStream(), [stopStream]);
 
@@ -867,7 +943,7 @@ export function App() {
   // Carga de logs. Modo "live" usa -f (stream continuo, ring buffer);
   // modo "query" trae una ventana historica acotada y la corta en el cliente.
   const runLogs = (
-    override?: Partial<{ mode: LogsMode; since: string; start: string; end: string }>
+    override?: Partial<{ mode: LogsMode; since: string; start: string; end: string; container: string; previous: boolean }>
   ) => {
     if (!activeTab || !activeTab.selectedName) return;
     stopStream();
@@ -875,16 +951,47 @@ export function App() {
     const since = override?.since ?? logsSince;
     const start = override?.start ?? logsStart;
     const end = override?.end ?? logsEnd;
+    const selectedPodForRun = activeTab.resource === "pods" ? activeTab.rows.find((item) => nameOf(item) === activeTab.selectedName) : undefined;
+    const containerNames = podContainerNames(selectedPodForRun);
+    const effectiveContainer = resolveLogContainer(selectedPodForRun, override?.container ?? logsContainer);
+    const previous = override?.previous ?? logsPrevious;
+    const allContainers = effectiveContainer === ALL_LOG_CONTAINERS;
+    const container = allContainers ? "" : effectiveContainer;
     const tabId = activeTab.id;
     const name = activeTab.selectedName;
-    const { args, startEpoch, endEpoch, follow } = buildLogsArgs(name, { mode, since, start, end });
+    const { args, startEpoch, endEpoch, follow } = buildLogsArgs(name, {
+      mode,
+      since,
+      start,
+      end,
+      container,
+      allContainers,
+      previous
+    });
     // Solo el seguimiento en vivo (preset) usa el ring buffer corto; los
     // volcados completos (Todo / historico) conservan mas para poder buscar.
     const cap = follow ? MAX_LIVE_LINES : MAX_QUERY_LINES;
     const inverted = startEpoch != null && endEpoch != null && endEpoch < startEpoch;
+    const command = formatKubectlCommand(args, activeTab.context, activeTab.namespace);
+    const target =
+      containerNames.length > 1
+        ? allContainers
+          ? "Todos los contenedores"
+          : `Contenedor ${container || defaultLogContainer(selectedPodForRun)}`
+        : "";
 
+    if (containerNames.length > 1 && effectiveContainer !== logsContainer) {
+      setLogsContainer(effectiveContainer);
+    }
     setLogsNotice("");
-    updateActiveTab({ loading: true, outputTitle: `Logs ${name}`, output: "", lastCommand: formatKubectlCommand(args, activeTab.context, activeTab.namespace) });
+    setLogsMeta({
+      cap,
+      truncated: false,
+      error: "",
+      command,
+      target
+    });
+    updateActiveTab({ loading: true, outputTitle: `Logs ${name}`, output: "", lastCommand: command });
     setViewMode("logs");
     setStreaming(true);
     logBufferRef.current = "";
@@ -896,7 +1003,11 @@ export function App() {
       const pending = logBufferRef.current;
       logBufferRef.current = "";
       if (!pending) return;
-      accum = capLines(accum + pending, cap);
+      const capped = capLines(accum + pending, cap);
+      accum = capped.text;
+      if (capped.truncated) {
+        setLogsMeta((current) => (current.truncated ? current : { ...current, truncated: true }));
+      }
       setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, output: accum } : tab)));
     };
 
@@ -919,7 +1030,7 @@ export function App() {
             }, LOG_FLUSH_MS);
           }
         },
-        onEnd: ({ command, error }) => {
+        onEnd: ({ command, error, code }) => {
           if (logFlushTimerRef.current != null) {
             window.clearTimeout(logFlushTimerRef.current);
             logFlushTimerRef.current = null;
@@ -936,16 +1047,22 @@ export function App() {
               })
               .join("\n");
           }
+          const commandError = error || (code !== null && code !== 0 ? `kubectl logs terminó con código ${code}. El detalle devuelto por kubectl está en la salida.` : "");
           const finalOut = error ? (merged ? `${merged}\n${error}` : error) : merged;
           setTabs((current) =>
             current.map((tab) =>
               tab.id === tabId
                 ? { ...tab, loading: false, lastCommand: command || tab.lastCommand, output: finalOut }
-                : tab
+              : tab
             )
           );
+          setLogsMeta((current) => ({
+            ...current,
+            command: command || current.command,
+            error: commandError
+          }));
 
-          if (!error && mode === "query") {
+          if (!commandError && mode === "query") {
             if (inverted) {
               setLogsNotice("El Fin es anterior al Inicio: no hay registros en ese rango.");
             } else if (merged.trim() === "") {
@@ -965,6 +1082,16 @@ export function App() {
   const changeLogsSince = (value: string) => {
     setLogsSince(value);
     if (activeTab?.selectedName) runLogs({ since: value });
+  };
+
+  const changeLogsContainer = (value: string) => {
+    setLogsContainer(value);
+    if (activeTab?.selectedName && viewMode === "logs") runLogs({ container: value });
+  };
+
+  const changeLogsPrevious = (value: boolean) => {
+    setLogsPrevious(value);
+    if (activeTab?.selectedName && viewMode === "logs") runLogs({ previous: value });
   };
 
   // Cambia entre modo Live e historico. Live recarga al instante; el historico
@@ -1004,9 +1131,6 @@ export function App() {
     }
     runLogs({ mode: "query" });
   };
-
-  const selectedName = activeTab?.selectedName ?? "";
-  const selectedConfig = activeTab ? configByKey[activeTab.resource] : resourceConfigs[0];
 
   const addTab = () => {
     const context = contexts[0] ?? "";
@@ -1494,6 +1618,13 @@ export function App() {
               onEndChange={setLogsEnd}
               onQuery={runLogsQuery}
               notice={logsNotice}
+              meta={logsMeta}
+              containerNames={logContainerNames}
+              selectedContainer={logsContainer || logDefaultContainer}
+              defaultContainer={logDefaultContainer}
+              previous={logsPrevious}
+              onContainerChange={changeLogsContainer}
+              onPreviousChange={changeLogsPrevious}
               expanded={logsExpanded}
               onToggleExpand={() => setLogsExpanded((value) => !value)}
               onCopy={copyToClipboard}
@@ -2199,7 +2330,13 @@ type ParsedLog = {
 
 function pick(obj: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) {
-    const value = obj[key];
+    let value = obj[key];
+    if ((value === undefined || value === null || value === "") && key.includes(".")) {
+      value = key.split(".").reduce<unknown>((current, part) => {
+        if (!current || typeof current !== "object") return undefined;
+        return (current as Record<string, unknown>)[part];
+      }, obj);
+    }
     if (value !== undefined && value !== null && value !== "") return value;
   }
   return undefined;
@@ -2253,6 +2390,25 @@ function levelClass(level?: string): string {
   return "";
 }
 
+function levelBucket(level?: string): LogLevelFilter {
+  if (!level) return "OTHER";
+  if (level.startsWith("ERR") || level === "FATAL" || level === "SEVERE") return "ERROR";
+  if (level.startsWith("WARN")) return "WARN";
+  if (level === "INFO") return "INFO";
+  if (level === "DEBUG") return "DEBUG";
+  if (level === "TRACE") return "TRACE";
+  return "OTHER";
+}
+
+const LOG_LEVEL_FILTERS: Array<{ value: LogLevelFilter; label: string }> = [
+  { value: "ERROR", label: "Error" },
+  { value: "WARN", label: "Warn" },
+  { value: "INFO", label: "Info" },
+  { value: "DEBUG", label: "Debug" },
+  { value: "TRACE", label: "Trace" },
+  { value: "OTHER", label: "Otros" }
+];
+
 const SINCE_OPTIONS: { label: string; value: string }[] = [
   { label: "Todo", value: "" },
   { label: "1 min", value: "1m" },
@@ -2300,6 +2456,13 @@ function LogsPanel({
   onEndChange,
   onQuery,
   notice,
+  meta,
+  containerNames = [],
+  selectedContainer = "",
+  defaultContainer = "",
+  previous = false,
+  onContainerChange,
+  onPreviousChange,
   expanded,
   onToggleExpand,
   onCopy,
@@ -2321,6 +2484,13 @@ function LogsPanel({
   onEndChange?: (value: string) => void;
   onQuery?: () => void;
   notice?: string;
+  meta?: LogsMeta;
+  containerNames?: string[];
+  selectedContainer?: string;
+  defaultContainer?: string;
+  previous?: boolean;
+  onContainerChange?: (value: string) => void;
+  onPreviousChange?: (value: boolean) => void;
   expanded?: boolean;
   onToggleExpand?: () => void;
   onCopy?: (text: string, label?: string) => void;
@@ -2334,6 +2504,10 @@ function LogsPanel({
   const [activeMatch, setActiveMatch] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [detailHeight, setDetailHeight] = useState(220);
+  const [detailTab, setDetailTab] = useState<"message" | "json" | "raw" | "fields">("message");
+  const [activeLevelFilters, setActiveLevelFilters] = useState<LogLevelFilter[]>([]);
+  const [followTail, setFollowTail] = useState(true);
+  const [atBottom, setAtBottom] = useState(true);
 
   // Virtualizacion: solo renderizamos las filas visibles del scroll.
   const [scrollTop, setScrollTop] = useState(0);
@@ -2373,22 +2547,45 @@ function LogsPanel({
   const endMin = start || undefined;
   const endMax = start ? minLocal(toLocalInputValue(new Date(new Date(start).getTime() + rangeMs)), nowLocal) : nowLocal;
 
+  const levelCounts = useMemo(() => {
+    const counts: Record<LogLevelFilter, number> = {
+      ERROR: 0,
+      WARN: 0,
+      INFO: 0,
+      DEBUG: 0,
+      TRACE: 0,
+      OTHER: 0
+    };
+    for (const line of lines) counts[levelBucket(getParsed(line).level)]++;
+    return counts;
+  }, [lines, getParsed]);
+
+  const activeLevelSet = useMemo(() => new Set(activeLevelFilters), [activeLevelFilters]);
+  const displayIndexes = useMemo(() => {
+    if (!activeLevelSet.size) return lines.map((_, index) => index);
+    const result: number[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (activeLevelSet.has(levelBucket(getParsed(lines[i]).level))) result.push(i);
+    }
+    return result;
+  }, [lines, activeLevelSet, getParsed]);
+
   const matches = useMemo(() => {
     const needle = term.toLowerCase();
     if (!needle) return [] as number[];
     const result: number[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const entry = getParsed(lines[i]);
+    for (const index of displayIndexes) {
+      const entry = getParsed(lines[index]);
       const haystack = `${entry.time ?? ""} ${entry.level ?? ""} ${entry.message} ${entry.source ?? ""}`.toLowerCase();
-      if (haystack.includes(needle)) result.push(i);
+      if (haystack.includes(needle)) result.push(index);
     }
     return result;
-  }, [lines, term, getParsed]);
+  }, [displayIndexes, lines, term, getParsed]);
 
   const matchSet = useMemo(() => new Set(matches), [matches]);
   const currentLine = matches.length ? matches[Math.min(activeMatch, matches.length - 1)] : -1;
 
-  const total = lines.length;
+  const total = displayIndexes.length;
   const totalHeight = total * LOG_ROW_H;
   const startIndex = Math.max(0, Math.floor(scrollTop / LOG_ROW_H) - LOG_OVERSCAN);
   const endIndex = Math.min(total, Math.ceil((scrollTop + viewportH) / LOG_ROW_H) + LOG_OVERSCAN);
@@ -2413,17 +2610,19 @@ function LogsPanel({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !pretty) return;
-    if (stickRef.current) {
+    if (followTail) {
       el.scrollTop = el.scrollHeight;
       setScrollTop(el.scrollTop);
+      setAtBottom(true);
     }
-  }, [total, pretty]);
+  }, [total, pretty, followTail]);
 
   // Llevar la fila de la coincidencia activa al centro del viewport.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || currentLine < 0) return;
     stickRef.current = false;
+    setFollowTail(false);
     el.scrollTop = Math.max(0, currentLine * LOG_ROW_H - el.clientHeight / 2);
     setScrollTop(el.scrollTop);
   }, [currentLine]);
@@ -2453,7 +2652,26 @@ function LogsPanel({
     const el = scrollRef.current;
     if (!el) return;
     setScrollTop(el.scrollTop);
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < LOG_ROW_H * 2;
+    const nextAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < LOG_ROW_H * 2;
+    stickRef.current = nextAtBottom;
+    setAtBottom(nextAtBottom);
+    if (!nextAtBottom && followTail) setFollowTail(false);
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setScrollTop(el.scrollTop);
+    setAtBottom(true);
+    setFollowTail(true);
+    stickRef.current = true;
+  };
+
+  const toggleLevelFilter = (level: LogLevelFilter) => {
+    setActiveLevelFilters((current) =>
+      current.includes(level) ? current.filter((item) => item !== level) : [...current, level]
+    );
   };
 
   const goNext = () => {
@@ -2463,7 +2681,13 @@ function LogsPanel({
     if (matches.length) setActiveMatch((current) => (current - 1 + matches.length) % matches.length);
   };
 
-  const selectedEntry = selected != null && lines[selected] ? getParsed(lines[selected]) : null;
+  const selectedRawLine = selected != null && lines[selected] ? lines[selected] : "";
+  const selectedEntry = selectedRawLine ? getParsed(selectedRawLine) : null;
+
+  useEffect(() => {
+    if (!selectedEntry) return;
+    setDetailTab(selectedEntry.json ? "message" : "raw");
+  }, [selectedEntry]);
 
   const startDetailResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2486,6 +2710,24 @@ function LogsPanel({
     window.addEventListener("pointerup", cleanup, { once: true });
     resizeCleanupRef.current = cleanup;
   };
+
+  const hasContainerSelector = containerNames.length > 1 && Boolean(onContainerChange);
+  const selectedContainerValue =
+    selectedContainer === ALL_LOG_CONTAINERS || containerNames.includes(selectedContainer)
+      ? selectedContainer
+      : defaultContainer;
+  const lineSummary = activeLevelFilters.length
+    ? `${displayIndexes.length.toLocaleString()} de ${lines.length.toLocaleString()} líneas`
+    : `${lines.length.toLocaleString()} líneas`;
+  const detailFields = selectedEntry?.json ? Object.entries(selectedEntry.json) : [];
+  const detailContent =
+    detailTab === "json" && selectedEntry?.json
+      ? JSON.stringify(selectedEntry.json, null, 2)
+      : detailTab === "fields" && selectedEntry?.json
+        ? detailFields.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join("\n")
+        : detailTab === "message" && selectedEntry
+          ? selectedEntry.message
+          : selectedRawLine;
 
   return (
     <div className="output-panel logs-panel">
@@ -2543,6 +2785,26 @@ function LogsPanel({
             <Search size={16} />
             Buscar
           </button>
+          {pretty && (
+            <>
+              <button
+                className={`toolbar-button ${followTail ? "active" : ""}`}
+                title={followTail ? "Pausar seguimiento" : "Seguir al final"}
+                disabled={!lines.length}
+                onClick={() => {
+                  if (followTail) setFollowTail(false);
+                  else scrollToBottom();
+                }}
+              >
+                {followTail ? <Pause size={16} /> : <Play size={16} />}
+                {followTail ? "Siguiendo" : "Pausado"}
+              </button>
+              <button className="toolbar-button" title="Ir al final" disabled={!lines.length || atBottom} onClick={scrollToBottom}>
+                <ChevronDown size={16} />
+                Final
+              </button>
+            </>
+          )}
           <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
             {pretty ? "Ver crudo" : "Ver formateado"}
           </button>
@@ -2576,6 +2838,48 @@ function LogsPanel({
                 </button>
               )
             ))}
+        </div>
+      </div>
+
+      <div className="logs-targetbar">
+        {hasContainerSelector && (
+          <label className="logs-target-control">
+            Contenedor
+            <span className="select-wrap">
+              <select value={selectedContainerValue} onChange={(event) => onContainerChange?.(event.target.value)} disabled={streaming}>
+                {containerNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name === defaultContainer ? `${name} (principal)` : name}
+                  </option>
+                ))}
+                <option value={ALL_LOG_CONTAINERS}>Todos</option>
+              </select>
+              <ChevronDown size={15} />
+            </span>
+          </label>
+        )}
+        <label className="logs-check">
+          <input type="checkbox" checked={previous} onChange={(event) => onPreviousChange?.(event.target.checked)} disabled={streaming} />
+          Anterior
+        </label>
+        <div className="logs-level-filters" aria-label="Filtrar por nivel">
+          {LOG_LEVEL_FILTERS.map((filter) => (
+            <button
+              key={filter.value}
+              className={`logs-filter-chip ${activeLevelSet.has(filter.value) ? "active" : ""}`}
+              onClick={() => toggleLevelFilter(filter.value)}
+              disabled={!levelCounts[filter.value]}
+              title={`${levelCounts[filter.value].toLocaleString()} líneas`}
+            >
+              {filter.label}
+              <span>{levelCounts[filter.value].toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+        <div className="logs-summary">
+          <span>{lineSummary}</span>
+          {meta?.target && <span>{meta.target}</span>}
+          {meta?.truncated && <strong>Truncado a {meta.cap.toLocaleString()}</strong>}
         </div>
       </div>
 
@@ -2652,16 +2956,29 @@ function LogsPanel({
       )}
 
       {notice && <div className="logs-notice">{notice}</div>}
+      {meta?.error && (
+        <div className="logs-error">
+          <AlertTriangle size={17} />
+          <div>
+            <strong>Error al ejecutar kubectl logs</strong>
+            {meta.command && <code>{meta.command}</code>}
+            <pre>{meta.error}</pre>
+          </div>
+        </div>
+      )}
 
       {lines.length === 0 ? (
         <div className="logs-empty">
           {streaming ? (mode === "query" ? "Consultando…" : "Esperando logs…") : "Sin logs"}
         </div>
+      ) : pretty && total === 0 ? (
+        <div className="logs-empty">Sin líneas para los filtros activos</div>
       ) : pretty ? (
         <div className="logs-vscroll" ref={scrollRef} onScroll={onScroll}>
           <div className="logs-vspace" style={{ height: totalHeight }}>
             <div className="logs-vrows" style={{ transform: `translateY(${startIndex * LOG_ROW_H}px)` }}>
-              {visible.map((index) => {
+              {visible.map((position) => {
+                const index = displayIndexes[position];
                 const entry = getParsed(lines[index]);
                 const isJson = Boolean(entry.json);
                 const isMatch = matchSet.has(index);
@@ -2697,11 +3014,30 @@ function LogsPanel({
           />
           <div className="log-detail-head">
             <span>Detalle de la línea</span>
-            <button className="icon-button" title="Cerrar" onClick={() => setSelected(null)}>
-              <X size={16} />
-            </button>
+            <div className="log-detail-tabs">
+              <button className={detailTab === "message" ? "active" : ""} onClick={() => setDetailTab("message")}>
+                Mensaje
+              </button>
+              <button className={detailTab === "json" ? "active" : ""} onClick={() => setDetailTab("json")} disabled={!selectedEntry.json}>
+                JSON
+              </button>
+              <button className={detailTab === "fields" ? "active" : ""} onClick={() => setDetailTab("fields")} disabled={!selectedEntry.json}>
+                Campos
+              </button>
+              <button className={detailTab === "raw" ? "active" : ""} onClick={() => setDetailTab("raw")}>
+                Raw
+              </button>
+            </div>
+            <div className="log-detail-actions">
+              <button className="icon-button" title="Copiar línea" onClick={() => onCopy?.(selectedRawLine, "Línea")}>
+                <Copy size={16} />
+              </button>
+              <button className="icon-button" title="Cerrar" onClick={() => setSelected(null)}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
-          <pre>{selectedEntry.json ? JSON.stringify(selectedEntry.json, null, 2) : selectedEntry.message}</pre>
+          <pre>{detailContent}</pre>
         </div>
       )}
     </div>
