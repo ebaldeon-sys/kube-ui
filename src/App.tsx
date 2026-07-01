@@ -1639,7 +1639,7 @@ function ResourceTable({
               return (
                 <tr key={name} className={tab.selectedName === name ? "selected" : ""} onClick={() => onSelect(name)}>
                   {config.columns.map((column) => (
-                    <td key={column.key}>{column.getter(item)}</td>
+                    <td key={column.key}>{renderTableCell(column.key, column.getter(item))}</td>
                   ))}
                 </tr>
               );
@@ -1656,6 +1656,22 @@ function ResourceTable({
       </div>
     </div>
   );
+}
+
+function renderTableCell(columnKey: string, value: string) {
+  if (columnKey === "status" || columnKey === "suspend") {
+    return <span className={`resource-badge ${resourceBadgeClass(value)}`}>{value}</span>;
+  }
+  return value;
+}
+
+function resourceBadgeClass(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized === "running" || normalized === "bound" || normalized === "active" || normalized === "no") return "ok";
+  if (normalized === "pending" || normalized === "unknown" || normalized === "si" || normalized === "sí") return "warn";
+  if (normalized === "failed" || normalized === "error" || normalized === "terminating") return "bad";
+  if (normalized === "succeeded" || normalized === "completed") return "done";
+  return "neutral";
 }
 
 function OutputPanel({
