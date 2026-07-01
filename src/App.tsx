@@ -454,6 +454,7 @@ export function App() {
   const [activeTabId, setActiveTabId] = useState("");
   const [fallbackViewMode, setFallbackViewMode] = useState<ViewMode>("table");
   const [globalMessage, setGlobalMessage] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
   const [namespaceDraft, setNamespaceDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -489,6 +490,7 @@ export function App() {
   // Buffer y temporizador para agrupar los chunks de logs antes de pintarlos.
   const logBufferRef = useRef<string>("");
   const logFlushTimerRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   // Ref siempre actualizada con la pestana activa (para usarla dentro de
   // callbacks memorizados como stopStream sin recrearlos en cada render).
   const activeTabIdRef = useRef(activeTabId);
@@ -539,15 +541,26 @@ export function App() {
     setGlobalMessage(`${title}: ${unknownMessage(error)}`);
   }, []);
 
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current != null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToastMessage(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage("");
+      toastTimerRef.current = null;
+    }, 2200);
+  }, []);
+
   const copyToClipboard = useCallback(async (text: string, label = "Texto") => {
     if (!text.trim()) return;
     try {
       await window.kubeui.writeClipboard(text);
-      setGlobalMessage(`${label} copiado al portapapeles.`);
+      showToast(`${label} copiado al portapapeles.`);
     } catch (error) {
       setGlobalMessage(`No se pudo copiar: ${unknownMessage(error)}`);
     }
-  }, []);
+  }, [showToast]);
 
   const refreshKubeconfigInfos = useCallback(async () => {
     if (!settings) return;
@@ -747,6 +760,10 @@ export function App() {
 
   // Detener cualquier streaming activo al cerrar la app.
   useEffect(() => () => stopStream(), [stopStream]);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
+  }, []);
 
   // Detener el streaming al cambiar de pestaña para no dejar procesos
   // `kubectl logs -f` / exec colgados consumiendo recursos en segundo plano.
@@ -1636,6 +1653,8 @@ export function App() {
         </div>
       )}
 
+      {toastMessage && <div className="toast-notice">{toastMessage}</div>}
+
       {detailDialog && (
         <div className="modal-backdrop" onClick={() => setDetailDialog(null)}>
           <div className="modal detail-modal" onClick={(event) => event.stopPropagation()}>
@@ -2314,6 +2333,7 @@ function LogsPanel({
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
+  const [detailHeight, setDetailHeight] = useState(220);
 
   // Virtualizacion: solo renderizamos las filas visibles del scroll.
   const [scrollTop, setScrollTop] = useState(0);
@@ -2321,6 +2341,7 @@ function LogsPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   const lines = useMemo(() => output.split("\n").filter((line) => line.trim().length > 0), [output]);
 
@@ -2424,6 +2445,10 @@ function LogsPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [searchOpen, searchDisabled]);
 
+  useEffect(() => () => {
+    resizeCleanupRef.current?.();
+  }, []);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -2439,6 +2464,28 @@ function LogsPanel({
   };
 
   const selectedEntry = selected != null && lines[selected] ? getParsed(lines[selected]) : null;
+
+  const startDetailResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeCleanupRef.current?.();
+    const startY = event.clientY;
+    const startHeight = detailHeight;
+    const maxHeight = Math.max(180, window.innerHeight - 260);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = startHeight + startY - moveEvent.clientY;
+      setDetailHeight(Math.min(Math.max(next, 130), maxHeight));
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      resizeCleanupRef.current = null;
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup, { once: true });
+    resizeCleanupRef.current = cleanup;
+  };
 
   return (
     <div className="output-panel logs-panel">
@@ -2641,7 +2688,13 @@ function LogsPanel({
       )}
 
       {selectedEntry && (
-        <div className="log-detail">
+        <div className="log-detail" style={{ height: detailHeight }}>
+          <div
+            className="log-detail-resizer"
+            role="separator"
+            aria-label="Redimensionar detalle de log"
+            onPointerDown={startDetailResize}
+          />
           <div className="log-detail-head">
             <span>Detalle de la línea</span>
             <button className="icon-button" title="Cerrar" onClick={() => setSelected(null)}>
