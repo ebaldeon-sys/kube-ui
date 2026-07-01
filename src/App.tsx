@@ -562,8 +562,9 @@ export function App() {
     []
   );
   const stopStreamRef = useRef<(() => void) | null>(null);
-  // Token incremental para descartar cargas de lista obsoletas (cambio rapido de recurso).
-  const loadTokenRef = useRef(0);
+  // Token incremental por pestaña/destino para descartar cargas obsoletas sin
+  // invalidar las consultas de otras pestañas.
+  const loadTokenRef = useRef<Record<string, number>>({});
   // Token incremental por pestaña para acciones puntuales
   // (describe / yaml / editar / delete...). Permite que una pestaña termine
   // en segundo plano sin que otra pestaña invalide su resultado.
@@ -590,6 +591,20 @@ export function App() {
   }, []);
 
   const isTabActionCurrent = useCallback((tabId: string, token: number) => actionTokenRef.current[tabId] === token, []);
+
+  const loadTokenKey = useCallback((tab: TabSession, config: ResourceConfig) => {
+    const namespacePart = config.namespaced ? tab.namespace : "";
+    return `${tab.id}:${tab.resource}:${tab.context}:${namespacePart}`;
+  }, []);
+
+  const nextLoadToken = useCallback((tab: TabSession, config: ResourceConfig) => {
+    const key = loadTokenKey(tab, config);
+    const next = (loadTokenRef.current[key] ?? 0) + 1;
+    loadTokenRef.current[key] = next;
+    return { key, token: next };
+  }, [loadTokenKey]);
+
+  const isLoadCurrent = useCallback((key: string, token: number) => loadTokenRef.current[key] === token, []);
 
   const stopStream = useCallback((opts?: { tabId?: string; state?: TabRunState; label?: string }) => {
     const owner = streamOwnerRef.current;
@@ -769,11 +784,11 @@ export function App() {
   const loadResources = useCallback(
     async (tab: TabSession) => {
       if (!tab.context) return;
-      // Token de carga: si se dispara otra consulta (cambio de recurso /
-      // namespace / contexto) mientras esta sigue en vuelo, descartamos el
-      // resultado tardio para no "pegar" datos del recurso anterior.
-      const token = ++loadTokenRef.current;
       const config = configByKey[tab.resource];
+      // Token de carga por pestaña/destino: si se dispara otra consulta del
+      // mismo destino mientras esta sigue en vuelo, descartamos el resultado
+      // tardio sin afectar las cargas de otras pestañas.
+      const { key: loadKey, token } = nextLoadToken(tab, config);
       // Firma del destino: el resultado solo se aplica si la pestana sigue en
       // el mismo recurso/contexto/namespace. Esto cubre el caso en que el
       // usuario vuelve a un kind que ya tenia datos en cache (no se dispara una
@@ -800,7 +815,7 @@ export function App() {
           namespace: config.namespaced ? tab.namespace : undefined
         });
       } catch (error) {
-        if (loadTokenRef.current !== token) return;
+        if (!isLoadCurrent(loadKey, token)) return;
         applyIfCurrent({
           loading: false,
           runState: "error",
@@ -812,7 +827,7 @@ export function App() {
         });
         return;
       }
-      if (loadTokenRef.current !== token) return;
+      if (!isLoadCurrent(loadKey, token)) return;
       if (!result.ok) {
         applyIfCurrent({ loading: false, runState: "error", runLabel: `Error: ${config.label}`, outputTitle: "Error", output: kubectlErrorText(result, "No se pudieron cargar los recursos."), lastCommand: result.command, rows: [] });
         return;
@@ -834,7 +849,7 @@ export function App() {
       }
       applyIfCurrent({ rows: items, selectedName: "", loading: false, runState: "done", runLabel: `${config.label} cargados`, lastCommand: result.command });
     },
-    [kubeconfigPaths]
+    [isLoadCurrent, kubeconfigPaths, nextLoadToken]
   );
 
   useEffect(() => {
@@ -1488,6 +1503,7 @@ export function App() {
     return Array.from(set);
   }, [activeTab?.context, activeTab?.namespace, contextNamespaces, namespacesByContext]);
   const statusOk = kubectlStatus?.ok;
+  const sessionLocked = viewMode !== "table";
 
   return (
     <div className={`app-shell ${logsExpanded ? "logs-expanded" : ""}`}>
@@ -1616,13 +1632,16 @@ export function App() {
         <section className="content">
           {globalMessage && <div className="banner">{globalMessage}</div>}
           {activeTab && viewMode !== "settings" && !logsExpanded && (
-            <div className="session-bar">
+            <div className={`session-bar ${sessionLocked ? "locked" : ""}`}>
               <label>
                 Contexto
                 <span className="select-wrap">
                   <select
                     value={activeTab.context}
+                    disabled={sessionLocked}
+                    title={sessionLocked ? "Disponible solo en la vista de listado" : "Cambiar contexto"}
                     onChange={(event) => {
+                      if (sessionLocked) return;
                       const nextContext = event.target.value;
                       const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de contexto" });
                       updateActiveTab({
@@ -1653,9 +1672,12 @@ export function App() {
                     list="namespace-options"
                     value={namespaceDraft}
                     placeholder="default"
+                    disabled={sessionLocked}
+                    title={sessionLocked ? "Disponible solo en la vista de listado" : "Cambiar namespace"}
                     spellCheck={false}
                     autoComplete="off"
                     onChange={(event) => {
+                      if (sessionLocked) return;
                       const value = event.target.value;
                       setNamespaceDraft(value);
                       if (namespaces.includes(value) && value !== activeTab.namespace) {
@@ -1664,12 +1686,15 @@ export function App() {
                       }
                     }}
                     onKeyDown={(event) => {
+                      if (sessionLocked) return;
                       if (event.key === "Enter") {
                         event.preventDefault();
                         commitNamespace();
                       }
                     }}
-                    onBlur={commitNamespace}
+                    onBlur={() => {
+                      if (!sessionLocked) commitNamespace();
+                    }}
                   />
                   <ChevronDown size={15} />
                   <datalist id="namespace-options">
@@ -1679,7 +1704,12 @@ export function App() {
                   </datalist>
                 </span>
               </label>
-              <button className="toolbar-button" onClick={refreshResources} disabled={activeTab.loading}>
+              <button
+                className="toolbar-button"
+                title={sessionLocked ? "Disponible solo en la vista de listado" : "Refrescar listado"}
+                onClick={refreshResources}
+                disabled={activeTab.loading || sessionLocked}
+              >
                 <RefreshCw size={16} />
                 Refrescar
               </button>

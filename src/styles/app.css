@@ -1637,6 +1637,21 @@ body {
   scrollbar-width: thin;
 }
 
+.session-bar.locked label {
+  color: #8a97aa;
+}
+
+.session-bar.locked .select-wrap select,
+.session-bar.locked .select-wrap input {
+  color: #7b8798;
+  background: #eef3f8;
+  border-color: #d8e2ec;
+}
+
+.session-bar.locked .select-wrap svg {
+  color: #a0adbf;
+}
+
 .toolbar-button,
 .icon-button {
   min-height: 34px;
