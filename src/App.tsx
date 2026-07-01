@@ -790,8 +790,9 @@ export function App() {
   );
 
   const loadResources = useCallback(
-    async (tab: TabSession) => {
+    async (tab: TabSession, options?: { silent?: boolean }) => {
       if (!tab.context) return;
+      const silent = Boolean(options?.silent);
       const config = configByKey[tab.resource];
       // Token de carga por pestaña/destino: si se dispara otra consulta del
       // mismo destino mientras esta sigue en vuelo, descartamos el resultado
@@ -813,7 +814,9 @@ export function App() {
         setTabs((current) =>
           current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
         );
-      updateTab(tab.id, { loading: true, runState: "running", runLabel: `Cargando ${config.label}`, output: "", outputTitle: "", rows: [], selectedName: "", selectedNames: [] });
+      if (!silent) {
+        updateTab(tab.id, { loading: true, runState: "running", runLabel: `Cargando ${config.label}`, output: "", outputTitle: "", rows: [], selectedName: "", selectedNames: [] });
+      }
       let result: KubectlResult;
       try {
         result = await window.kubeui.runKubectl({
@@ -824,6 +827,10 @@ export function App() {
         });
       } catch (error) {
         if (!isLoadCurrent(loadKey, token)) return;
+        if (silent) {
+          setGlobalMessage(`No se pudo refrescar ${config.label}: ${unknownMessage(error)}`);
+          return;
+        }
         applyIfCurrent({
           loading: false,
           runState: "error",
@@ -837,6 +844,10 @@ export function App() {
       }
       if (!isLoadCurrent(loadKey, token)) return;
       if (!result.ok) {
+        if (silent) {
+          setGlobalMessage(`No se pudo refrescar ${config.label}: ${kubectlOutput(result, "Error desconocido.")}`);
+          return;
+        }
         applyIfCurrent({ loading: false, runState: "error", runLabel: `Error: ${config.label}`, outputTitle: "Error", output: kubectlErrorText(result, "No se pudieron cargar los recursos."), lastCommand: result.command, rows: [] });
         return;
       }
@@ -844,6 +855,10 @@ export function App() {
       try {
         items = (JSON.parse(result.stdout) as { items?: KubeItem[] }).items ?? [];
       } catch (error) {
+        if (silent) {
+          setGlobalMessage(`No se pudo refrescar ${config.label}: kubectl devolvio una respuesta JSON invalida.`);
+          return;
+        }
         applyIfCurrent({
           loading: false,
           runState: "error",
@@ -852,6 +867,15 @@ export function App() {
           output: `kubectl devolvio una respuesta JSON invalida.\n\n${unknownMessage(error)}`,
           lastCommand: result.command,
           rows: []
+        });
+        return;
+      }
+      if (silent) {
+        const names = new Set(items.map(nameOf).filter(Boolean));
+        applyIfCurrent({
+          rows: items,
+          selectedName: names.has(tab.selectedName) ? tab.selectedName : "",
+          selectedNames: tab.selectedNames.filter((name) => names.has(name))
         });
         return;
       }
@@ -1332,7 +1356,7 @@ export function App() {
     const tab = activeTab;
     if (!(await requestConfirm(`Eliminar ${selectedConfig.label}: ${selectedName}?`))) return;
     const result = await showOutput("details", ["delete", selectedConfig.kubectlName, selectedName], `Eliminar ${selectedName}`);
-    if (result?.ok) await loadResources(tab);
+    if (result?.ok) await loadResources(tab, { silent: true });
   };
 
   const restartResource = async () => {
@@ -1362,7 +1386,7 @@ export function App() {
     }
     if (!(await requestConfirm(confirmMessage))) return;
     const result = await showOutput("details", args, title);
-    if (result?.ok) await loadResources(tab);
+    if (result?.ok) await loadResources(tab, { silent: true });
   };
 
   const scaleDeployment = async () => {
@@ -1372,7 +1396,7 @@ export function App() {
     const replicas = await requestInput("Réplicas", "1");
     if (!replicas || !/^\d+$/.test(replicas)) return;
     const result = await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
-    if (result?.ok) await loadResources(tab);
+    if (result?.ok) await loadResources(tab, { silent: true });
   };
 
   // "Editar": traemos el YAML del recurso a un borrador editable y abrimos el
@@ -1424,7 +1448,7 @@ export function App() {
       ["patch", "cronjob", selectedName, "-p", JSON.stringify({ spec: { suspend: next } })],
       `${next ? "Suspender" : "Reanudar"} ${selectedName}`
     );
-    if (result?.ok) await loadResources(tab);
+    if (result?.ok) await loadResources(tab, { silent: true });
   };
 
   const runTerminal = () => {
@@ -1559,34 +1583,36 @@ export function App() {
           {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
         </button>
         <div className="tabstrip-tabs">
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
-              onClick={() => {
-                setActiveTabId(tab.id);
-              }}
-            >
-              <Layers3 size={15} />
-              {tab.runState !== "idle" && (
-                <span
-                  className={`tab-run-dot ${tab.runState}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " pinned" : ""}`}
-                  title={`${runStateText(tab.runState)}${tab.runLabel ? `: ${tab.runLabel}` : ""}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " · fijado" : ""}`}
-                />
-              )}
-              <span>{tab.title}</span>
-              {tabs.length > 1 && (
-                <X
-                  size={14}
-                  className="chrome-tab-close"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTab(tab.id);
-                  }}
-                />
-              )}
-            </div>
-          ))}
+          <div className="tabstrip-tab-list">
+            {tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
+                onClick={() => {
+                  setActiveTabId(tab.id);
+                }}
+              >
+                <Layers3 size={15} />
+                {tab.runState !== "idle" && (
+                  <span
+                    className={`tab-run-dot ${tab.runState}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " pinned" : ""}`}
+                    title={`${runStateText(tab.runState)}${tab.runLabel ? `: ${tab.runLabel}` : ""}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " · fijado" : ""}`}
+                  />
+                )}
+                <span>{tab.title}</span>
+                {tabs.length > 1 && (
+                  <X
+                    size={14}
+                    className="chrome-tab-close"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
           <button
             className="tabstrip-add"
             title={!contexts.length ? "Agrega un kubeconfig con contextos" : tabs.length >= MAX_TABS ? `Límite de ${MAX_TABS} pestañas` : "Nueva pestaña"}

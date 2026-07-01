@@ -94,6 +94,15 @@ button:disabled {
   overflow: hidden;
 }
 
+.tabstrip-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .chrome-tab {
   display: inline-flex;
   align-items: center;
@@ -1499,6 +1508,10 @@ body {
 .tabstrip-tabs {
   gap: 5px;
   overflow: hidden;
+}
+
+.tabstrip-tab-list {
+  gap: 5px;
 }
 
 .chrome-tab {
