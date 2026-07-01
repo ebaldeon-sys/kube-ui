@@ -96,6 +96,8 @@ type TabSession = {
   rows: KubeItem[];
   selectedName: string;
   selectedNames: string[];
+  tableFilters: Partial<Record<ResourceKey, string>>;
+  logsPrefs: LogsPrefs;
   viewMode: ViewMode;
   outputTitle: string;
   output: string;
@@ -354,6 +356,18 @@ type LogsMeta = {
 
 type LogLevelFilter = "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" | "OTHER";
 
+type LogsPrefs = {
+  mode: LogsMode;
+  since: string;
+  start: string;
+  end: string;
+  container: string;
+  previous: boolean;
+  pretty: boolean;
+  query: string;
+  activeLevelFilters: LogLevelFilter[];
+};
+
 // Modo Live (-f): el log crece para siempre, asi que mantenemos un ring buffer.
 const MAX_LIVE_LINES = 5000;
 // Modo Consulta (historico): cargamos toda la ventana, con un tope de seguridad.
@@ -368,6 +382,20 @@ const LOG_ROW_H = 24;
 const LOG_OVERSCAN = 12;
 const ALL_LOG_CONTAINERS = "__all__";
 const MAX_TABS = 12;
+
+function createDefaultLogsPrefs(): LogsPrefs {
+  return {
+    mode: "live",
+    since: "5m",
+    start: "",
+    end: "",
+    container: "",
+    previous: false,
+    pretty: true,
+    query: "",
+    activeLevelFilters: []
+  };
+}
 
 // Timestamp que antepone `kubectl logs --timestamps` (RFC3339).
 const K8S_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s+/;
@@ -539,13 +567,7 @@ export function App() {
   const [namespaceDraft, setNamespaceDraft] = useState("");
   const [streamOwner, setStreamOwner] = useState<StreamOwner | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [logsSince, setLogsSince] = useState("5m");
-  const [logsMode, setLogsMode] = useState<LogsMode>("live");
-  const [logsStart, setLogsStart] = useState("");
-  const [logsEnd, setLogsEnd] = useState("");
   const [logsNotice, setLogsNotice] = useState("");
-  const [logsContainer, setLogsContainer] = useState("");
-  const [logsPrevious, setLogsPrevious] = useState(false);
   const [logsMeta, setLogsMeta] = useState<LogsMeta>({
     cap: MAX_LIVE_LINES,
     truncated: false,
@@ -584,6 +606,7 @@ export function App() {
   const logFlushTimerRef = useRef<number | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const streamOwnerRef = useRef<StreamOwner | null>(null);
+  const lastLogSelectionRef = useRef<Record<string, string>>({});
 
   const setCurrentStreamOwner = useCallback((owner: StreamOwner | null) => {
     streamOwnerRef.current = owner;
@@ -650,6 +673,7 @@ export function App() {
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const viewMode: ViewMode = activeTab?.viewMode ?? fallbackViewMode;
+  const activeLogsPrefs = activeTab?.logsPrefs ?? createDefaultLogsPrefs();
   const activeStreamOwner = streamOwner?.tabId === activeTabId ? streamOwner : null;
   const streaming = Boolean(activeStreamOwner);
   const kubeconfigPaths = useMemo(() => settings?.kubeconfigPaths ?? [], [settings]);
@@ -920,8 +944,11 @@ export function App() {
   }, [activeTab?.id, activeTab?.namespace]);
 
   useEffect(() => {
-    setLogsContainer("");
-    setLogsPrevious(false);
+    if (!activeTab) return;
+    const previous = lastLogSelectionRef.current[activeTab.id];
+    if (previous === activeTab.selectedName) return;
+    lastLogSelectionRef.current[activeTab.id] = activeTab.selectedName;
+    updateTab(activeTab.id, { logsPrefs: createDefaultLogsPrefs() });
     setLogsNotice("");
     setLogsMeta({
       cap: MAX_LIVE_LINES,
@@ -983,6 +1010,16 @@ export function App() {
 
   const updateActiveTab = (patch: Partial<TabSession>) => {
     setTabs((current) => current.map((tab) => (tab.id === activeTabId ? { ...tab, ...patch } : tab)));
+  };
+
+  const updateTableFilter = (resource: ResourceKey, value: string) => {
+    if (!activeTab) return;
+    updateActiveTab({ tableFilters: { ...(activeTab.tableFilters ?? {}), [resource]: value } });
+  };
+
+  const updateLogsPrefs = (patch: Partial<LogsPrefs>) => {
+    if (!activeTab) return;
+    updateActiveTab({ logsPrefs: { ...(activeTab.logsPrefs ?? createDefaultLogsPrefs()), ...patch } });
   };
 
   const setViewMode = (mode: ViewMode) => {
@@ -1081,18 +1118,20 @@ export function App() {
   ) => {
     if (!activeTab || !activeTab.selectedName) return;
     stopStream({ state: "stopped", label: "Reemplazado" });
-    const mode = override?.mode ?? logsMode;
-    const since = override?.since ?? logsSince;
-    const start = override?.start ?? logsStart;
-    const end = override?.end ?? logsEnd;
+    const prefs = activeTab.logsPrefs ?? createDefaultLogsPrefs();
+    const mode = override?.mode ?? prefs.mode;
+    const since = override?.since ?? prefs.since;
+    const start = override?.start ?? prefs.start;
+    const end = override?.end ?? prefs.end;
     const selectedPodForRun = activeTab.resource === "pods" ? activeTab.rows.find((item) => nameOf(item) === activeTab.selectedName) : undefined;
     const containerNames = podContainerNames(selectedPodForRun);
-    const effectiveContainer = resolveLogContainer(selectedPodForRun, override?.container ?? logsContainer);
-    const previous = override?.previous ?? logsPrevious;
+    const effectiveContainer = resolveLogContainer(selectedPodForRun, override?.container ?? prefs.container);
+    const previous = override?.previous ?? prefs.previous;
     const allContainers = effectiveContainer === ALL_LOG_CONTAINERS;
     const container = allContainers ? "" : effectiveContainer;
     const tabId = activeTab.id;
     const name = activeTab.selectedName;
+    const nextLogsPrefs: LogsPrefs = { ...prefs, mode, since, start, end, container: effectiveContainer, previous };
     const { args, startEpoch, endEpoch, follow } = buildLogsArgs(name, {
       mode,
       since,
@@ -1114,9 +1153,6 @@ export function App() {
           : `Contenedor ${container || defaultLogContainer(selectedPodForRun)}`
         : "";
 
-    if (containerNames.length > 1 && effectiveContainer !== logsContainer) {
-      setLogsContainer(effectiveContainer);
-    }
     setLogsNotice("");
     setLogsMeta({
       cap,
@@ -1131,7 +1167,8 @@ export function App() {
       runLabel: follow ? "Logs en vivo" : "Consultando logs",
       outputTitle: `Logs ${name}`,
       output: "",
-      lastCommand: command
+      lastCommand: command,
+      logsPrefs: nextLogsPrefs
     });
     setViewMode("logs");
     setCurrentStreamOwner({
@@ -1234,17 +1271,17 @@ export function App() {
 
   // Cambia el preset --since y recarga con el modo actual.
   const changeLogsSince = (value: string) => {
-    setLogsSince(value);
+    updateLogsPrefs({ since: value });
     if (activeTab?.selectedName) runLogs({ since: value });
   };
 
   const changeLogsContainer = (value: string) => {
-    setLogsContainer(value);
+    updateLogsPrefs({ container: value });
     if (activeTab?.selectedName && viewMode === "logs") runLogs({ container: value });
   };
 
   const changeLogsPrevious = (value: boolean) => {
-    setLogsPrevious(value);
+    updateLogsPrefs({ previous: value });
     if (activeTab?.selectedName && viewMode === "logs") runLogs({ previous: value });
   };
 
@@ -1264,27 +1301,26 @@ export function App() {
   // Cambia entre modo Live e historico. Live recarga al instante; el historico
   // prepara un rango por defecto y espera a que el usuario pulse "Consultar".
   const changeLogsMode = (mode: LogsMode) => {
-    setLogsMode(mode);
+    updateLogsPrefs({ mode });
     if (mode === "live") {
       if (activeTab?.selectedName) runLogs({ mode: "live" });
       return;
     }
     // Al pasar a Historico cargamos de inmediato el rango por defecto
     // (ultimos 30 min) en vez de mantener los logs del modo En vivo.
-    const start = logsStart || toLocalInputValue(new Date(Date.now() - 1_800_000));
-    const end = logsEnd || toLocalInputValue(new Date());
-    setLogsStart(start);
-    setLogsEnd(end);
+    const start = activeLogsPrefs.start || toLocalInputValue(new Date(Date.now() - 1_800_000));
+    const end = activeLogsPrefs.end || toLocalInputValue(new Date());
+    updateLogsPrefs({ mode, start, end });
     if (activeTab?.selectedName) runLogs({ mode: "query", start, end });
   };
 
   // Ejecuta la consulta historica con el rango personalizado actual.
   const runLogsQuery = () => {
-    setLogsMode("query");
+    updateLogsPrefs({ mode: "query" });
     // El limite aplica al ANCHO del rango (Inicio -> Fin), no a la antiguedad.
-    if (logsStart && logsEnd) {
-      const startMs = new Date(logsStart).getTime();
-      const endMs = new Date(logsEnd).getTime();
+    if (activeLogsPrefs.start && activeLogsPrefs.end) {
+      const startMs = new Date(activeLogsPrefs.start).getTime();
+      const endMs = new Date(activeLogsPrefs.end).getTime();
       if (!Number.isNaN(startMs) && !Number.isNaN(endMs)) {
         if (endMs < startMs) {
           setLogsNotice("El Fin es anterior al Inicio.");
@@ -1613,14 +1649,16 @@ export function App() {
               </div>
             ))}
           </div>
-          <button
-            className="tabstrip-add"
-            title={!contexts.length ? "Agrega un kubeconfig con contextos" : tabs.length >= MAX_TABS ? `Límite de ${MAX_TABS} pestañas` : "Nueva pestaña"}
-            onClick={addTab}
-            disabled={!contexts.length || tabs.length >= MAX_TABS}
-          >
-            <Plus size={16} />
-          </button>
+          {tabs.length < MAX_TABS && (
+            <button
+              className="tabstrip-add"
+              title={!contexts.length ? "Agrega un kubeconfig con contextos" : "Nueva pestaña"}
+              onClick={addTab}
+              disabled={!contexts.length}
+            >
+              <Plus size={16} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1827,6 +1865,8 @@ export function App() {
             <ResourceTable
               tab={activeTab}
               config={selectedConfig}
+              filter={activeTab.tableFilters?.[selectedConfig.key] ?? ""}
+              onFilterChange={(value) => updateTableFilter(selectedConfig.key, value)}
               onRefresh={refreshResources}
               onSelect={(name) => updateActiveTab({ selectedName: name })}
               onTogglePodSelection={togglePodSelection}
@@ -1860,23 +1900,29 @@ export function App() {
               title={activeTab.outputTitle}
               output={activeTab.output}
               streaming={streaming}
-              following={logsMode === "live" && !!logsSince}
-              mode={logsMode}
+              following={activeLogsPrefs.mode === "live" && !!activeLogsPrefs.since}
+              mode={activeLogsPrefs.mode}
               onModeChange={changeLogsMode}
-              since={logsSince}
+              since={activeLogsPrefs.since}
               onSinceChange={changeLogsSince}
-              start={logsStart}
-              end={logsEnd}
-              onStartChange={setLogsStart}
-              onEndChange={setLogsEnd}
+              start={activeLogsPrefs.start}
+              end={activeLogsPrefs.end}
+              onStartChange={(value) => updateLogsPrefs({ start: value })}
+              onEndChange={(value) => updateLogsPrefs({ end: value })}
               onQuery={runLogsQuery}
               notice={logsNotice}
               meta={logsMeta}
               containerNames={logContainerNames}
-              selectedContainer={logsContainer || logDefaultContainer}
+              selectedContainer={activeLogsPrefs.container || logDefaultContainer}
               defaultContainer={logDefaultContainer}
-              previous={logsPrevious}
+              previous={activeLogsPrefs.previous}
               pinned={activeTab.streamPinned}
+              pretty={activeLogsPrefs.pretty}
+              onPrettyChange={(value) => updateLogsPrefs({ pretty: value })}
+              query={activeLogsPrefs.query}
+              onQueryChange={(value) => updateLogsPrefs({ query: value })}
+              activeLevelFilters={activeLogsPrefs.activeLevelFilters}
+              onActiveLevelFiltersChange={(value) => updateLogsPrefs({ activeLevelFilters: value })}
               onContainerChange={changeLogsContainer}
               onPreviousChange={changeLogsPrevious}
               onPinnedChange={changeLogsPinned}
@@ -2233,6 +2279,8 @@ function SettingsView({
 function ResourceTable({
   tab,
   config,
+  filter,
+  onFilterChange,
   onRefresh,
   onSelect,
   onTogglePodSelection,
@@ -2249,6 +2297,8 @@ function ResourceTable({
 }: {
   tab: TabSession;
   config: ResourceConfig;
+  filter: string;
+  onFilterChange: (value: string) => void;
   onRefresh: () => void;
   onSelect: (name: string) => void;
   onTogglePodSelection: (name: string) => void;
@@ -2273,7 +2323,6 @@ function ResourceTable({
   const selectedRow = tab.rows.find((item) => nameOf(item) === tab.selectedName);
   const cronSuspended = Boolean((selectedRow?.spec as { suspend?: boolean })?.suspend);
   const loadError = tab.outputTitle.startsWith("Error") && tab.output.trim();
-  const [filter, setFilter] = useState("");
   const selectAllRef = useRef<HTMLInputElement>(null);
   const needle = filter.trim().toLowerCase();
   const filteredRows = useMemo(() => {
@@ -2370,10 +2419,10 @@ function ResourceTable({
           type="text"
           value={filter}
           placeholder={`Filtrar ${config.label.toLowerCase()}...`}
-          onChange={(event) => setFilter(event.target.value)}
+          onChange={(event) => onFilterChange(event.target.value)}
         />
         {filter && (
-          <button className="table-filter-clear" title="Limpiar" onClick={() => setFilter("")}>
+          <button className="table-filter-clear" title="Limpiar" onClick={() => onFilterChange("")}>
             <X size={14} />
           </button>
         )}
@@ -2780,6 +2829,12 @@ function LogsPanel({
   defaultContainer = "",
   previous = false,
   pinned = false,
+  pretty = true,
+  onPrettyChange,
+  query = "",
+  onQueryChange,
+  activeLevelFilters = [],
+  onActiveLevelFiltersChange,
   onContainerChange,
   onPreviousChange,
   onPinnedChange,
@@ -2810,6 +2865,12 @@ function LogsPanel({
   defaultContainer?: string;
   previous?: boolean;
   pinned?: boolean;
+  pretty?: boolean;
+  onPrettyChange?: (value: boolean) => void;
+  query?: string;
+  onQueryChange?: (value: string) => void;
+  activeLevelFilters?: LogLevelFilter[];
+  onActiveLevelFiltersChange?: (value: LogLevelFilter[]) => void;
   onContainerChange?: (value: string) => void;
   onPreviousChange?: (value: boolean) => void;
   onPinnedChange?: (value: boolean) => void;
@@ -2820,14 +2881,11 @@ function LogsPanel({
   onResume?: () => void;
   onStop?: () => void;
 }) {
-  const [pretty, setPretty] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [detailHeight, setDetailHeight] = useState(180);
   const [detailTab, setDetailTab] = useState<"message" | "json" | "raw" | "fields">("message");
-  const [activeLevelFilters, setActiveLevelFilters] = useState<LogLevelFilter[]>([]);
   const [levelCounts, setLevelCounts] = useState<Record<LogLevelFilter, number>>(() => emptyLevelCounts());
   const [levelCountsReady, setLevelCountsReady] = useState(true);
   const [followTail, setFollowTail] = useState(true);
@@ -3003,11 +3061,11 @@ function LogsPanel({
         event.preventDefault();
         if (searchDisabled) return;
         setSearchOpen(true);
-        setPretty(true);
+        onPrettyChange?.(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 0);
       } else if (event.key === "Escape" && searchOpen) {
         setSearchOpen(false);
-        setQuery("");
+        onQueryChange?.("");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3039,9 +3097,10 @@ function LogsPanel({
   };
 
   const toggleLevelFilter = (level: LogLevelFilter) => {
-    setActiveLevelFilters((current) =>
-      current.includes(level) ? current.filter((item) => item !== level) : [...current, level]
-    );
+    const next = activeLevelFilters.includes(level)
+      ? activeLevelFilters.filter((item) => item !== level)
+      : [...activeLevelFilters, level];
+    onActiveLevelFiltersChange?.(next);
   };
 
   const goNext = () => {
@@ -3147,7 +3206,7 @@ function LogsPanel({
             title={searchDisabled ? "Disponible cuando termine de cargar" : "Buscar (Ctrl+F)"}
             disabled={searchDisabled}
             onClick={() => {
-              setPretty(true);
+              onPrettyChange?.(true);
               setSearchOpen((value) => !value);
               window.setTimeout(() => searchInputRef.current?.focus(), 0);
             }}
@@ -3185,7 +3244,7 @@ function LogsPanel({
               {pinned ? "En 2º plano" : "2º plano"}
             </button>
           )}
-          <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
+          <button className="toolbar-button" onClick={() => onPrettyChange?.(!pretty)}>
             {pretty ? "Ver crudo" : "Ver formateado"}
           </button>
           {output && (
@@ -3304,7 +3363,7 @@ function LogsPanel({
             value={query}
             placeholder="Buscar en los logs..."
             spellCheck={false}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => onQueryChange?.(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -3312,7 +3371,7 @@ function LogsPanel({
                 else goNext();
               } else if (event.key === "Escape") {
                 setSearchOpen(false);
-                setQuery("");
+                onQueryChange?.("");
               }
             }}
           />
@@ -3330,7 +3389,7 @@ function LogsPanel({
             title="Cerrar (Esc)"
             onClick={() => {
               setSearchOpen(false);
-              setQuery("");
+              onQueryChange?.("");
             }}
           >
             <X size={16} />
@@ -3560,6 +3619,8 @@ function createTab(context: string, namespace?: string): TabSession {
     rows: [],
     selectedName: "",
     selectedNames: [],
+    tableFilters: {},
+    logsPrefs: createDefaultLogsPrefs(),
     viewMode: "table",
     outputTitle: "",
     output: "",
