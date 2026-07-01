@@ -4,7 +4,7 @@ kubeui is a desktop Kubernetes client powered by the `kubectl` already installed
 
 ## Requirements
 
-- Node.js and npm for development.
+- Node.js 22.12.0 or newer and npm for development.
 - `kubectl` installed and available in `PATH` for using the app.
 - A valid kubeconfig, usually:
   - macOS/Linux: `~/.kube/config`

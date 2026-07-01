@@ -18,6 +18,13 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! node -e 'const v=process.versions.node.split(".").map(Number); const ok=v[0]>22 || (v[0]===22 && (v[1]>12 || (v[1]===12 && v[2]>=0))); process.exit(ok?0:1)'; then
+  echo "Node.js 22.12.0 or newer is required for Electron 42."
+  echo "Current Node: $(node --version)"
+  echo "Install Node.js 22 LTS or newer, then run this file again."
+  exit 1
+fi
+
 echo "Node: $(node --version)"
 echo "npm: $(npm --version)"
 echo

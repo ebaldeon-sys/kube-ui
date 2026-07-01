@@ -24,6 +24,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
+node -e "const v=process.versions.node.split('.').map(Number); const ok=v[0]>22 || (v[0]===22 && (v[1]>12 || (v[1]===12 && v[2]>=0))); process.exit(ok?0:1)"
+if errorlevel 1 (
+  echo Node.js 22.12.0 or newer is required for Electron 42.
+  echo Current Node:
+  node --version
+  echo.
+  echo Install Node.js 22 LTS or newer, then run this file again.
+  echo.
+  pause
+  exit /b 1
+)
+
 echo Node:
 node --version
 echo npm:

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -32,6 +32,15 @@ type KubectlResult = {
   stdout: string;
   stderr: string;
   command: string;
+};
+
+type KubeconfigInspection = {
+  path: string;
+  exists: boolean;
+  contexts: string[];
+  ok: boolean;
+  error?: string;
+  command?: string;
 };
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -108,8 +117,10 @@ function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
     const timeout = setTimeout(() => {
       if (!settled) {
+        timedOut = true;
         child.kill();
       }
     }, request.timeoutMs ?? 120_000);
@@ -134,11 +145,12 @@ function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
     child.on("close", (code) => {
       settled = true;
       clearTimeout(timeout);
+      const timeoutMessage = `El comando excedio ${(request.timeoutMs ?? 120_000) / 1000} segundos y fue interrumpido.`;
       resolve({
-        ok: code === 0,
+        ok: code === 0 && !timedOut,
         code,
         stdout,
-        stderr,
+        stderr: timedOut ? (stderr ? `${stderr}\n${timeoutMessage}` : timeoutMessage) : stderr,
         command: ["kubectl", ...args].map(quoteForDisplay).join(" ")
       });
     });
@@ -148,6 +160,16 @@ function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
     }
     child.stdin.end();
   });
+}
+
+function errorResult(command: string, error: unknown): KubectlResult {
+  return {
+    ok: false,
+    code: null,
+    stdout: "",
+    stderr: error instanceof Error ? error.message : String(error),
+    command
+  };
 }
 
 function parseCommandLine(command: string) {
@@ -268,6 +290,71 @@ ipcMain.handle("settings:removeKubeconfig", async (_event, kubeconfigPath: strin
   return next;
 });
 
+ipcMain.handle("settings:inspectKubeconfigs", async () => {
+  const current = await readSettings();
+  const inspections: KubeconfigInspection[] = [];
+
+  for (const kubeconfigPath of current.kubeconfigPaths) {
+    try {
+      await access(kubeconfigPath);
+    } catch {
+      inspections.push({
+        path: kubeconfigPath,
+        exists: false,
+        contexts: [],
+        ok: false,
+        error: "El archivo no existe o no se puede leer."
+      });
+      continue;
+    }
+
+    const result = await runKubectl({
+      args: ["config", "view", "-o", "json"],
+      kubeconfigPaths: [kubeconfigPath],
+      timeoutMs: 15_000
+    });
+
+    if (!result.ok) {
+      inspections.push({
+        path: kubeconfigPath,
+        exists: true,
+        contexts: [],
+        ok: false,
+        error: result.stderr || "No se pudieron leer los contextos.",
+        command: result.command
+      });
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(result.stdout) as { contexts?: Array<{ name?: string }> };
+      inspections.push({
+        path: kubeconfigPath,
+        exists: true,
+        contexts: (parsed.contexts ?? []).map((context) => context.name).filter((name): name is string => Boolean(name)),
+        ok: true,
+        command: result.command
+      });
+    } catch (error) {
+      inspections.push({
+        path: kubeconfigPath,
+        exists: true,
+        contexts: [],
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        command: result.command
+      });
+    }
+  }
+
+  return inspections;
+});
+
+ipcMain.handle("settings:revealKubeconfig", async (_event, kubeconfigPath: string) => {
+  shell.showItemInFolder(kubeconfigPath);
+  return true;
+});
+
 ipcMain.handle("kubectl:run", async (_event, request: KubectlRunRequest) => {
   return runKubectl(request);
 });
@@ -296,8 +383,8 @@ ipcMain.handle("kubectl:runManual", async (_event, request: KubectlManualRequest
 
 ipcMain.handle("kubectl:applyYaml", async (_event, request: Omit<KubectlRunRequest, "args"> & { yaml: string }) => {
   const filePath = path.join(tmpdir(), `kubeui-${randomUUID()}.yaml`);
-  await writeFile(filePath, request.yaml, "utf8");
   try {
+    await writeFile(filePath, request.yaml, "utf8");
     return await runKubectl({
       args: ["apply", "-f", filePath],
       kubeconfigPaths: request.kubeconfigPaths,
@@ -305,6 +392,8 @@ ipcMain.handle("kubectl:applyYaml", async (_event, request: Omit<KubectlRunReque
       namespace: request.namespace,
       timeoutMs: 120_000
     });
+  } catch (error) {
+    return errorResult("kubectl apply -f <tempfile>", error);
   } finally {
     await unlink(filePath).catch(() => undefined);
   }
@@ -315,8 +404,8 @@ ipcMain.handle("kubectl:applyYaml", async (_event, request: Omit<KubectlRunReque
 // concurrencia y no mantiene la anotacion last-applied-configuration.
 ipcMain.handle("kubectl:replaceYaml", async (_event, request: Omit<KubectlRunRequest, "args"> & { yaml: string }) => {
   const filePath = path.join(tmpdir(), `kubeui-${randomUUID()}.yaml`);
-  await writeFile(filePath, request.yaml, "utf8");
   try {
+    await writeFile(filePath, request.yaml, "utf8");
     return await runKubectl({
       args: ["replace", "-f", filePath],
       kubeconfigPaths: request.kubeconfigPaths,
@@ -324,6 +413,8 @@ ipcMain.handle("kubectl:replaceYaml", async (_event, request: Omit<KubectlRunReq
       namespace: request.namespace,
       timeoutMs: 120_000
     });
+  } catch (error) {
+    return errorResult("kubectl replace -f <tempfile>", error);
   } finally {
     await unlink(filePath).catch(() => undefined);
   }

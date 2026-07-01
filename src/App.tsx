@@ -1,11 +1,14 @@
 import {
   ArrowLeft,
+  AlertTriangle,
   Boxes,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   FileCode2,
   FolderPlus,
+  FolderOpen,
   Layers3,
   PanelLeftClose,
   PanelLeftOpen,
@@ -29,7 +32,7 @@ import {
   XCircle
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KubectlResult, Settings as AppSettings } from "./types";
+import type { KubeconfigInspection, KubectlResult, Settings as AppSettings } from "./types";
 
 type ResourceKey =
   | "pods"
@@ -103,6 +106,13 @@ type TabSession = {
   loading: boolean;
   // Cache por kind: guarda el ultimo estado antes de cambiar de recurso.
   resourceCache: Partial<Record<ResourceKey, ResourceSnapshot>>;
+};
+
+type DetailDialog = {
+  title: string;
+  message?: string;
+  details?: string;
+  command?: string;
 };
 
 const resourceConfigs: ResourceConfig[] = [
@@ -408,18 +418,41 @@ function formatKubectlCommand(args: string[], context?: string, namespace?: stri
     .join(" ");
 }
 
+function unknownMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function kubectlOutput(result: KubectlResult, fallback: string) {
+  return result.stderr.trim() || result.stdout.trim() || fallback;
+}
+
+function kubectlErrorText(result: KubectlResult, fallback: string) {
+  const body = kubectlOutput(result, fallback);
+  const code = result.code === null ? "" : `\n\nExit code: ${result.code}`;
+  return `${body}${code}`;
+}
+
+function isUnsupportedInteractiveCommand(command: string) {
+  const normalized = command.toLowerCase();
+  const hasInteractiveFlag = /(^|\s)-i?t(\s|$)|(^|\s)-t(\s|$)|(^|\s)--tty(\s|$)|(^|\s)--stdin(\s|$)/.test(normalized);
+  return (/\b(exec|attach)\b/.test(normalized) && hasInteractiveFlag) || /\bport-forward\b/.test(normalized);
+}
+
 export function App() {
   if (!window.kubeui) {
     return <MissingBridge />;
   }
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [kubeconfigInfos, setKubeconfigInfos] = useState<KubeconfigInspection[]>([]);
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [kubectlStatus, setKubectlStatus] = useState<KubectlResult | null>(null);
   const [contexts, setContexts] = useState<string[]>([]);
   const [contextNamespaces, setContextNamespaces] = useState<Record<string, string>>({});
   const [namespacesByContext, setNamespacesByContext] = useState<Record<string, string[]>>({});
   const [tabs, setTabs] = useState<TabSession[]>([]);
   const [activeTabId, setActiveTabId] = useState("");
+  const [fallbackViewMode, setFallbackViewMode] = useState<ViewMode>("table");
   const [globalMessage, setGlobalMessage] = useState("");
   const [namespaceDraft, setNamespaceDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -433,6 +466,7 @@ export function App() {
   const [logsExpanded, setLogsExpanded] = useState(false);
   // Vista a la que regresar al cerrar la configuracion (kubeconfig).
   const [settingsReturn, setSettingsReturn] = useState<ViewMode>("table");
+  const [detailDialog, setDetailDialog] = useState<DetailDialog | null>(null);
   // Dialogos in-app (reemplazan a window.confirm/prompt, que bloquean el
   // renderer de Electron y dejan la ventana "congelada").
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; resolve: (value: boolean) => void } | null>(null);
@@ -487,7 +521,7 @@ export function App() {
   }, []);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
-  const viewMode: ViewMode = activeTab?.viewMode ?? "table";
+  const viewMode: ViewMode = activeTab?.viewMode ?? fallbackViewMode;
   const kubeconfigPaths = useMemo(() => settings?.kubeconfigPaths ?? [], [settings]);
 
   const run = useCallback(
@@ -501,15 +535,50 @@ export function App() {
     [kubeconfigPaths]
   );
 
+  const showAppError = useCallback((title: string, error: unknown) => {
+    setGlobalMessage(`${title}: ${unknownMessage(error)}`);
+  }, []);
+
+  const copyToClipboard = useCallback(async (text: string, label = "Texto") => {
+    if (!text.trim()) return;
+    try {
+      window.kubeui.writeClipboard(text);
+      setGlobalMessage(`${label} copiado al portapapeles.`);
+    } catch (error) {
+      setGlobalMessage(`No se pudo copiar: ${unknownMessage(error)}`);
+    }
+  }, []);
+
+  const refreshKubeconfigInfos = useCallback(async () => {
+    if (!settings) return;
+    setSettingsBusy(true);
+    try {
+      const infos = await window.kubeui.inspectKubeconfigs();
+      setKubeconfigInfos(infos);
+    } catch (error) {
+      showAppError("No se pudieron validar los kubeconfig", error);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [settings, showAppError]);
+
   const refreshContexts = useCallback(async () => {
-    const result = await window.kubeui.runKubectl({
-      args: ["config", "view", "-o", "json"],
-      kubeconfigPaths
-    });
+    let result: KubectlResult;
+    try {
+      result = await window.kubeui.runKubectl({
+        args: ["config", "view", "-o", "json"],
+        kubeconfigPaths
+      });
+    } catch (error) {
+      setContexts([]);
+      setContextNamespaces({});
+      showAppError("No se pudieron leer los contextos", error);
+      return;
+    }
     if (!result.ok) {
       setContexts([]);
       setContextNamespaces({});
-      setGlobalMessage(result.stderr || "No se pudieron leer los contextos.");
+      setGlobalMessage(kubectlErrorText(result, "No se pudieron leer los contextos."));
       return;
     }
     let parsed: { contexts?: { name?: string; context?: { namespace?: string } }[] } = {};
@@ -528,7 +597,7 @@ export function App() {
     }
     setContexts(nextContexts);
     setContextNamespaces(nsMap);
-    setGlobalMessage("");
+    setGlobalMessage(nextContexts.length || !kubeconfigPaths.length ? "" : "No se encontraron contextos en los kubeconfig registrados.");
     setTabs((current) => {
       if (!nextContexts.length) return current;
       if (!current.length) {
@@ -543,18 +612,28 @@ export function App() {
           : { ...tab, context: nextContexts[0], title: nextContexts[0], namespace: nsMap[nextContexts[0]] ?? "default", rows: [], selectedName: "" }
       );
     });
-  }, [kubeconfigPaths]);
+  }, [kubeconfigPaths, showAppError]);
 
   const refreshNamespaces = useCallback(
     async (context: string) => {
       if (!context) return;
-      const result = await window.kubeui.runKubectl({
-        args: ["get", "namespaces", "-o", "json"],
-        kubeconfigPaths,
-        context
-      });
+      let result: KubectlResult;
+      try {
+        result = await window.kubeui.runKubectl({
+          args: ["get", "namespaces", "-o", "json"],
+          kubeconfigPaths,
+          context
+        });
+      } catch {
+        return;
+      }
       if (!result.ok) return;
-      const payload = JSON.parse(result.stdout) as { items?: KubeItem[] };
+      let payload: { items?: KubeItem[] };
+      try {
+        payload = JSON.parse(result.stdout) as { items?: KubeItem[] };
+      } catch {
+        return;
+      }
       const namespaces = (payload.items ?? []).map(nameOf).filter(Boolean);
       setNamespacesByContext((current) => ({
         ...current,
@@ -589,22 +668,42 @@ export function App() {
           current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
         );
       updateTab(tab.id, { loading: true, output: "", outputTitle: "", rows: [], selectedName: "" });
-      const result = await window.kubeui.runKubectl({
-        args: ["get", config.kubectlName, "-o", "json"],
-        kubeconfigPaths,
-        context: tab.context,
-        namespace: config.namespaced ? tab.namespace : undefined
-      });
+      let result: KubectlResult;
+      try {
+        result = await window.kubeui.runKubectl({
+          args: ["get", config.kubectlName, "-o", "json"],
+          kubeconfigPaths,
+          context: tab.context,
+          namespace: config.namespaced ? tab.namespace : undefined
+        });
+      } catch (error) {
+        if (loadTokenRef.current !== token) return;
+        applyIfCurrent({
+          loading: false,
+          outputTitle: "Error",
+          output: unknownMessage(error),
+          lastCommand: formatKubectlCommand(["get", config.kubectlName, "-o", "json"], tab.context, config.namespaced ? tab.namespace : undefined),
+          rows: []
+        });
+        return;
+      }
       if (loadTokenRef.current !== token) return;
       if (!result.ok) {
-        applyIfCurrent({ loading: false, outputTitle: "Error", output: result.stderr, lastCommand: result.command, rows: [] });
+        applyIfCurrent({ loading: false, outputTitle: "Error", output: kubectlErrorText(result, "No se pudieron cargar los recursos."), lastCommand: result.command, rows: [] });
         return;
       }
       let items: KubeItem[] = [];
       try {
         items = (JSON.parse(result.stdout) as { items?: KubeItem[] }).items ?? [];
-      } catch {
-        items = [];
+      } catch (error) {
+        applyIfCurrent({
+          loading: false,
+          outputTitle: "Error",
+          output: `kubectl devolvio una respuesta JSON invalida.\n\n${unknownMessage(error)}`,
+          lastCommand: result.command,
+          rows: []
+        });
+        return;
       }
       applyIfCurrent({ rows: items, selectedName: "", loading: false, lastCommand: result.command });
     },
@@ -612,14 +711,28 @@ export function App() {
   );
 
   useEffect(() => {
-    window.kubeui.getSettings().then(setSettings);
-  }, []);
+    window.kubeui.getSettings().then(setSettings).catch((error) => showAppError("No se pudo leer la configuracion", error));
+  }, [showAppError]);
 
   useEffect(() => {
     if (!settings) return;
-    window.kubeui.runKubectl({ args: ["version", "--client"], kubeconfigPaths }).then(setKubectlStatus);
+    window.kubeui.runKubectl({ args: ["version", "--client"], kubeconfigPaths }).then(setKubectlStatus).catch((error) =>
+      setKubectlStatus({
+        ok: false,
+        code: null,
+        stdout: "",
+        stderr: unknownMessage(error),
+        command: "kubectl version --client"
+      })
+    );
     refreshContexts();
   }, [settings, kubeconfigPaths, refreshContexts]);
+
+  useEffect(() => {
+    if (viewMode === "settings" && settings) {
+      refreshKubeconfigInfos();
+    }
+  }, [viewMode, settings, refreshKubeconfigInfos]);
 
   useEffect(() => {
     if (activeTab?.context && !namespacesByContext[activeTab.context]) {
@@ -669,7 +782,10 @@ export function App() {
     setTabs((current) => current.map((tab) => (tab.id === activeTabId ? { ...tab, ...patch } : tab)));
   };
 
-  const setViewMode = (mode: ViewMode) => updateActiveTab({ viewMode: mode });
+  const setViewMode = (mode: ViewMode) => {
+    if (activeTab) updateActiveTab({ viewMode: mode });
+    else setFallbackViewMode(mode);
+  };
 
   const commitNamespace = () => {
     if (!activeTab) return;
@@ -700,8 +816,8 @@ export function App() {
     setViewMode("table");
   };
 
-  const showOutput = async (mode: ViewMode, args: string[], title: string) => {
-    if (!activeTab) return;
+  const showOutput = async (mode: ViewMode, args: string[], title: string): Promise<KubectlResult | null> => {
+    if (!activeTab) return null;
     stopStream();
     const token = ++actionTokenRef.current;
     const tabId = activeTab.id;
@@ -709,14 +825,26 @@ export function App() {
     // ve que el comando se lanzo y puede interrumpirlo mientras espera.
     updateActiveTab({ loading: true, outputTitle: title, output: "" });
     setViewMode(mode);
-    const result = await run(activeTab, args);
-    if (actionTokenRef.current !== token) return; // interrumpido o reemplazado
+    let result: KubectlResult;
+    try {
+      result = await run(activeTab, args);
+    } catch (error) {
+      result = {
+        ok: false,
+        code: null,
+        stdout: "",
+        stderr: unknownMessage(error),
+        command: formatKubectlCommand(args, activeTab.context, configByKey[activeTab.resource].namespaced ? activeTab.namespace : undefined)
+      };
+    }
+    if (actionTokenRef.current !== token) return null; // interrumpido o reemplazado
     updateTab(tabId, {
       loading: false,
-      outputTitle: title,
-      output: result.ok ? result.stdout : result.stderr,
+      outputTitle: result.ok ? title : `Error: ${title}`,
+      output: result.ok ? result.stdout : kubectlErrorText(result, "El comando fallo."),
       lastCommand: result.command
     });
+    return result;
   };
 
   // Carga de logs. Modo "live" usa -f (stream continuo, ring buffer);
@@ -865,6 +993,7 @@ export function App() {
 
   const addTab = () => {
     const context = contexts[0] ?? "";
+    if (!context) return;
     const tab = createTab(context, contextNamespaces[context]);
     setTabs((current) => [...current, tab]);
     setActiveTabId(tab.id);
@@ -882,20 +1011,39 @@ export function App() {
   };
 
   const addKubeconfigs = async () => {
-    const next = await window.kubeui.addKubeconfigs();
-    setSettings((current) => (current ? { ...current, kubeconfigPaths: next.kubeconfigPaths } : null));
+    try {
+      const next = await window.kubeui.addKubeconfigs();
+      setSettings((current) => (current ? { ...current, kubeconfigPaths: next.kubeconfigPaths } : null));
+      setGlobalMessage("");
+    } catch (error) {
+      showAppError("No se pudo agregar el kubeconfig", error);
+    }
   };
 
   const removeKubeconfig = async (kubeconfigPath: string) => {
-    const next = await window.kubeui.removeKubeconfig(kubeconfigPath);
-    setSettings((current) => (current ? { ...current, kubeconfigPaths: next.kubeconfigPaths } : null));
+    try {
+      const next = await window.kubeui.removeKubeconfig(kubeconfigPath);
+      setSettings((current) => (current ? { ...current, kubeconfigPaths: next.kubeconfigPaths } : null));
+      setKubeconfigInfos((current) => current.filter((info) => info.path !== kubeconfigPath));
+      setGlobalMessage("");
+    } catch (error) {
+      showAppError("No se pudo quitar el kubeconfig", error);
+    }
+  };
+
+  const revealKubeconfig = async (kubeconfigPath: string) => {
+    try {
+      await window.kubeui.revealKubeconfig(kubeconfigPath);
+    } catch (error) {
+      showAppError("No se pudo abrir la ubicacion del kubeconfig", error);
+    }
   };
 
   const deleteResource = async () => {
     if (!activeTab || !selectedName) return;
     if (!(await requestConfirm(`Eliminar ${selectedConfig.label}: ${selectedName}?`))) return;
-    await showOutput("details", ["delete", selectedConfig.kubectlName, selectedName], `Eliminar ${selectedName}`);
-    await refreshResources();
+    const result = await showOutput("details", ["delete", selectedConfig.kubectlName, selectedName], `Eliminar ${selectedName}`);
+    if (result?.ok) await refreshResources();
   };
 
   const restartResource = async () => {
@@ -910,8 +1058,8 @@ export function App() {
       return;
     }
     if (!(await requestConfirm(`Reiniciar ${selectedName}?`))) return;
-    await showOutput("details", args, `Reiniciar ${selectedName}`);
-    await refreshResources();
+    const result = await showOutput("details", args, `Reiniciar ${selectedName}`);
+    if (result?.ok) await refreshResources();
   };
 
   const scaleDeployment = async () => {
@@ -919,8 +1067,8 @@ export function App() {
     if (!["deployments", "statefulsets", "replicasets"].includes(activeTab.resource)) return;
     const replicas = await requestInput("Réplicas", "1");
     if (!replicas || !/^\d+$/.test(replicas)) return;
-    await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
-    await refreshResources();
+    const result = await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
+    if (result?.ok) await refreshResources();
   };
 
   // "Editar": traemos el YAML del recurso a un borrador editable y abrimos el
@@ -935,10 +1083,21 @@ export function App() {
     // trae el YAML del recurso). El usuario puede interrumpir si demora.
     updateActiveTab({ loading: true, yamlDraft: "", yamlEditMode: true, outputTitle: `Editar ${selectedName}` });
     setViewMode("apply");
-    const result = await run(activeTab, ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"]);
+    let result: KubectlResult;
+    try {
+      result = await run(activeTab, ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"]);
+    } catch (error) {
+      result = {
+        ok: false,
+        code: null,
+        stdout: "",
+        stderr: unknownMessage(error),
+        command: formatKubectlCommand(["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], activeTab.context, activeTab.namespace)
+      };
+    }
     if (actionTokenRef.current !== token) return; // interrumpido o reemplazado
     if (!result.ok) {
-      updateTab(tabId, { loading: false, viewMode: "details", outputTitle: "Error", output: result.stderr, lastCommand: result.command });
+      updateTab(tabId, { loading: false, viewMode: "details", outputTitle: "Error: Editar recurso", output: kubectlErrorText(result, "No se pudo obtener el YAML."), lastCommand: result.command });
       return;
     }
     updateTab(tabId, { loading: false, yamlDraft: result.stdout, yamlEditMode: true, lastCommand: result.command });
@@ -955,12 +1114,12 @@ export function App() {
     if (!activeTab || activeTab.resource !== "cronjobs" || !selectedName) return;
     const row = activeTab.rows.find((item) => nameOf(item) === selectedName);
     const next = !Boolean((row?.spec as { suspend?: boolean })?.suspend);
-    await showOutput(
+    const result = await showOutput(
       "details",
       ["patch", "cronjob", selectedName, "-p", JSON.stringify({ spec: { suspend: next } })],
       `${next ? "Suspender" : "Reanudar"} ${selectedName}`
     );
-    await refreshResources();
+    if (result?.ok) await refreshResources();
   };
 
   const runTerminal = () => {
@@ -968,6 +1127,14 @@ export function App() {
     stopStream();
     const tabId = activeTab.id;
     const command = activeTab.terminalCommand;
+    if (isUnsupportedInteractiveCommand(command)) {
+      updateActiveTab({
+        terminalOutput:
+          `$ ${command}\n\nEste comando requiere una sesion interactiva o de larga duracion que todavia no esta soportada en esta terminal.\nUsa una terminal externa para exec -it, attach -it o port-forward.`,
+        lastCommand: command
+      });
+      return;
+    }
     updateActiveTab({ loading: true, terminalOutput: `$ ${command}\n\n` });
     setStreaming(true);
     stopStreamRef.current = window.kubeui.streamKubectl(
@@ -997,9 +1164,13 @@ export function App() {
   };
 
   const pickYaml = async () => {
-    const file = await window.kubeui.pickYamlFile();
-    // Cargar un archivo es un Apply libre, no la edicion de un recurso vivo.
-    if (file) updateActiveTab({ yamlDraft: file.content, yamlEditMode: false });
+    try {
+      const file = await window.kubeui.pickYamlFile();
+      // Cargar un archivo es un Apply libre, no la edicion de un recurso vivo.
+      if (file) updateActiveTab({ yamlDraft: file.content, yamlEditMode: false });
+    } catch (error) {
+      showAppError("No se pudo abrir el archivo YAML", error);
+    }
   };
 
   const applyYaml = async () => {
@@ -1016,11 +1187,22 @@ export function App() {
       context: activeTab.context,
       namespace: activeTab.namespace
     };
-    const result = editMode ? await window.kubeui.replaceYaml(payload) : await window.kubeui.applyYaml(payload);
+    let result: KubectlResult;
+    try {
+      result = editMode ? await window.kubeui.replaceYaml(payload) : await window.kubeui.applyYaml(payload);
+    } catch (error) {
+      result = {
+        ok: false,
+        code: null,
+        stdout: "",
+        stderr: unknownMessage(error),
+        command: editMode ? "kubectl replace -f <tempfile>" : "kubectl apply -f <tempfile>"
+      };
+    }
     updateActiveTab({
       loading: false,
-      outputTitle: editMode ? "Editar recurso" : "Apply YAML",
-      output: result.ok ? result.stdout : result.stderr,
+      outputTitle: result.ok ? (editMode ? "Editar recurso" : "Aplicar YAML") : `Error: ${editMode ? "Editar recurso" : "Aplicar YAML"}`,
+      output: result.ok ? result.stdout : kubectlErrorText(result, "No se pudo aplicar el YAML."),
       lastCommand: result.command
     });
     setViewMode("details");
@@ -1072,7 +1254,7 @@ export function App() {
               )}
             </div>
           ))}
-          <button className="tabstrip-add" title="Nueva pestaña" onClick={addTab}>
+          <button className="tabstrip-add" title={contexts.length ? "Nueva pestaña" : "Agrega un kubeconfig con contextos"} onClick={addTab} disabled={!contexts.length}>
             <Plus size={16} />
           </button>
         </div>
@@ -1149,7 +1331,7 @@ export function App() {
               </button>
               <button className={viewMode === "apply" ? "active" : ""} onClick={() => { updateActiveTab({ yamlEditMode: false }); setViewMode("apply"); }}>
                 <FileCode2 size={16} />
-                Apply YAML
+                Aplicar YAML
               </button>
             </div>
           </aside>
@@ -1217,16 +1399,35 @@ export function App() {
                 Refrescar
               </button>
               <code>{activeTab.lastCommand || "kubectl --context ..."}</code>
+              <button className="icon-button" title="Copiar comando" onClick={() => copyToClipboard(activeTab.lastCommand, "Comando")} disabled={!activeTab.lastCommand}>
+                <Copy size={16} />
+              </button>
             </div>
           )}
 
           {viewMode === "settings" && settings && (
             <SettingsView
               settings={settings}
+              infos={kubeconfigInfos}
+              loading={settingsBusy}
               onAdd={addKubeconfigs}
               onRemove={removeKubeconfig}
               onRefresh={refreshContexts}
+              onValidate={refreshKubeconfigInfos}
+              onReveal={revealKubeconfig}
               onBack={() => setViewMode(settingsReturn)}
+            />
+          )}
+
+          {!activeTab && viewMode !== "settings" && (
+            <EmptyWorkspace
+              settingsReady={Boolean(settings)}
+              kubeconfigCount={kubeconfigPaths.length}
+              onAdd={addKubeconfigs}
+              onSettings={() => {
+                setSettingsReturn("table");
+                setViewMode("settings");
+              }}
             />
           )}
 
@@ -1252,8 +1453,10 @@ export function App() {
             <OutputPanel
               title={activeTab.outputTitle}
               output={activeTab.output}
+              command={activeTab.lastCommand}
               loading={activeTab.loading}
               onInterrupt={interruptAction}
+              onCopy={copyToClipboard}
               onBack={() => setViewMode("table")}
             />
           )}
@@ -1276,6 +1479,7 @@ export function App() {
               notice={logsNotice}
               expanded={logsExpanded}
               onToggleExpand={() => setLogsExpanded((value) => !value)}
+              onCopy={copyToClipboard}
               onBack={() => {
                 stopStream();
                 setViewMode("table");
@@ -1294,6 +1498,7 @@ export function App() {
               onChange={(terminalCommand) => updateActiveTab({ terminalCommand })}
               onRun={runTerminal}
               onStop={stopStream}
+              onCopy={copyToClipboard}
             />
           )}
 
@@ -1321,10 +1526,19 @@ export function App() {
               <span>{kubeconfigPaths.length ? `${kubeconfigPaths.length} kubeconfig` : "sin kubeconfig"}</span>
             </div>
           </div>
-          <div className={`status-pill ${statusOk ? "ok" : "bad"}`}>
+          <button
+            className={`status-pill ${statusOk ? "ok" : "bad"}`}
+            title="Ver detalle de kubectl"
+            onClick={() => setDetailDialog({
+              title: statusOk ? "kubectl listo" : "kubectl no disponible",
+              message: statusOk ? "La app puede ejecutar kubectl desde el PATH actual." : "No se pudo ejecutar kubectl correctamente.",
+              details: kubectlStatus ? kubectlOutput(kubectlStatus, "Sin detalle disponible.") : "Aun no se ejecuto la verificacion.",
+              command: kubectlStatus?.command
+            })}
+          >
             {statusOk ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
             <span>{statusOk ? "kubectl listo" : "kubectl no disponible"}</span>
-          </div>
+          </button>
           <button
             className="icon-button"
             title="Configurar kubeconfig"
@@ -1421,6 +1635,38 @@ export function App() {
           </div>
         </div>
       )}
+
+      {detailDialog && (
+        <div className="modal-backdrop" onClick={() => setDetailDialog(null)}>
+          <div className="modal detail-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-heading">
+              <AlertTriangle size={18} />
+              <strong>{detailDialog.title}</strong>
+            </div>
+            {detailDialog.message && <p className="modal-message">{detailDialog.message}</p>}
+            {detailDialog.command && (
+              <div className="command-box">
+                <code>{detailDialog.command}</code>
+                <button className="icon-button" title="Copiar comando" onClick={() => copyToClipboard(detailDialog.command ?? "", "Comando")}>
+                  <Copy size={15} />
+                </button>
+              </div>
+            )}
+            {detailDialog.details && <pre className="modal-pre">{detailDialog.details}</pre>}
+            <div className="modal-actions">
+              {detailDialog.details && (
+                <button className="toolbar-button" onClick={() => copyToClipboard(detailDialog.details ?? "", "Detalle")}>
+                  <Copy size={16} />
+                  Copiar
+                </button>
+              )}
+              <button className="toolbar-button primary" onClick={() => setDetailDialog(null)}>
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1440,19 +1686,64 @@ function MissingBridge() {
   );
 }
 
+function EmptyWorkspace({
+  settingsReady,
+  kubeconfigCount,
+  onAdd,
+  onSettings
+}: {
+  settingsReady: boolean;
+  kubeconfigCount: number;
+  onAdd: () => void;
+  onSettings: () => void;
+}) {
+  return (
+    <div className="empty-workspace">
+      <div>
+        <Boxes size={28} />
+        <h1>{settingsReady ? "No hay contextos cargados" : "Cargando configuracion"}</h1>
+        <p>
+          {kubeconfigCount
+            ? "No se encontraron contextos disponibles en los kubeconfig registrados."
+            : "Agrega un kubeconfig para empezar a explorar tus recursos Kubernetes."}
+        </p>
+        <div className="button-row">
+          <button className="toolbar-button primary" onClick={onAdd}>
+            <FolderPlus size={16} />
+            Agregar kubeconfig
+          </button>
+          <button className="toolbar-button" onClick={onSettings}>
+            <Settings size={16} />
+            Configuracion
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
+  infos,
+  loading,
   onAdd,
   onRemove,
   onRefresh,
+  onValidate,
+  onReveal,
   onBack
 }: {
   settings: AppSettings;
+  infos: KubeconfigInspection[];
+  loading: boolean;
   onAdd: () => void;
   onRemove: (path: string) => void;
+  onValidate: () => void;
+  onReveal: (path: string) => void;
   onRefresh: () => void;
   onBack?: () => void;
 }) {
+  const infoByPath = useMemo(() => new Map(infos.map((info) => [info.path, info])), [infos]);
   return (
     <div className="settings-view">
       <div className="panel-title">
@@ -1472,9 +1763,13 @@ function SettingsView({
             <FolderPlus size={16} />
             Agregar
           </button>
+          <button className="toolbar-button" onClick={onValidate} disabled={loading}>
+            <Shield size={16} />
+            Validar
+          </button>
           <button className="toolbar-button" onClick={onRefresh}>
             <RefreshCw size={16} />
-            Contextos
+            Recargar contextos
           </button>
         </div>
       </div>
@@ -1484,15 +1779,44 @@ function SettingsView({
             <span>Agrega un archivo kubeconfig para cargar tus contextos.</span>
           </div>
         )}
-        {settings.kubeconfigPaths.map((kubeconfigPath) => (
-          <div className="file-row" key={kubeconfigPath}>
-            <Shield size={17} />
-            <code>{kubeconfigPath}</code>
-            <button className="icon-button danger" title="Quitar" onClick={() => onRemove(kubeconfigPath)}>
-              <Trash2 size={16} />
-            </button>
-          </div>
-        ))}
+        {settings.kubeconfigPaths.map((kubeconfigPath) => {
+          const info = infoByPath.get(kubeconfigPath);
+          return (
+            <div className="file-row file-row-rich" key={kubeconfigPath}>
+              <Shield size={17} />
+              <div className="file-row-main">
+                <code>{kubeconfigPath}</code>
+                <div className="file-meta">
+                  {loading && !info ? (
+                    <span className="resource-badge neutral">Validando</span>
+                  ) : info ? (
+                    <>
+                      <span className={`resource-badge ${info.ok ? "ok" : "bad"}`}>{info.ok ? "OK" : "Error"}</span>
+                      <span>{info.exists ? `${info.contexts.length} contextos` : "Archivo no disponible"}</span>
+                      {info.error && <span className="file-error">{info.error}</span>}
+                    </>
+                  ) : (
+                    <span className="resource-badge neutral">Sin validar</span>
+                  )}
+                </div>
+                {info?.contexts.length ? (
+                  <div className="context-chip-list">
+                    {info.contexts.slice(0, 5).map((context) => (
+                      <span key={context}>{context}</span>
+                    ))}
+                    {info.contexts.length > 5 && <span>+{info.contexts.length - 5}</span>}
+                  </div>
+                ) : null}
+              </div>
+              <button className="icon-button" title="Abrir ubicacion" onClick={() => onReveal(kubeconfigPath)}>
+                <FolderOpen size={16} />
+              </button>
+              <button className="icon-button danger" title="Quitar" onClick={() => onRemove(kubeconfigPath)}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1531,6 +1855,7 @@ function ResourceTable({
   const busy = tab.loading;
   const selectedRow = tab.rows.find((item) => nameOf(item) === tab.selectedName);
   const cronSuspended = Boolean((selectedRow?.spec as { suspend?: boolean })?.suspend);
+  const loadError = tab.outputTitle.startsWith("Error") && tab.output.trim();
   const [filter, setFilter] = useState("");
   const needle = filter.trim().toLowerCase();
   const filteredRows = useMemo(() => {
@@ -1562,7 +1887,7 @@ function ResourceTable({
           </button>
           <button className="toolbar-button" onClick={onDescribe} disabled={!selected || busy}>
             <ScrollText size={16} />
-            Describe
+            Describir
           </button>
           <button className="toolbar-button" onClick={onYaml} disabled={!selected || busy}>
             <FileCode2 size={16} />
@@ -1624,37 +1949,137 @@ function ResourceTable({
           </button>
         )}
       </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {config.columns.map((column) => (
-                <th key={column.key}>{column.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRows.map((item) => {
-              const name = nameOf(item);
-              return (
-                <tr key={name} className={tab.selectedName === name ? "selected" : ""} onClick={() => onSelect(name)}>
-                  {config.columns.map((column) => (
-                    <td key={column.key}>{renderTableCell(column.key, column.getter(item))}</td>
-                  ))}
-                </tr>
-              );
-            })}
-            {!filteredRows.length && (
+      <div className={`resource-table-body ${selectedRow ? "with-inspector" : ""}`}>
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={config.columns.length} className="empty-state">
-                  {tab.loading ? "Cargando..." : needle ? "Sin coincidencias" : "Sin datos"}
-                </td>
+                {config.columns.map((column) => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredRows.map((item) => {
+                const name = nameOf(item);
+                return (
+                  <tr key={name} className={tab.selectedName === name ? "selected" : ""} onClick={() => onSelect(name)}>
+                    {config.columns.map((column) => (
+                      <td key={column.key}>{renderTableCell(column.key, column.getter(item))}</td>
+                    ))}
+                  </tr>
+                );
+              })}
+              {!filteredRows.length && (
+                <tr>
+                  <td colSpan={config.columns.length} className="empty-state">
+                    {loadError ? (
+                      <div className="table-error">
+                        <AlertTriangle size={22} />
+                        <strong>No se pudieron cargar {config.label}</strong>
+                        <pre>{tab.output}</pre>
+                        {tab.lastCommand && <code>{tab.lastCommand}</code>}
+                        <button className="toolbar-button" onClick={onRefresh}>
+                          <RefreshCw size={16} />
+                          Reintentar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="empty-state-box">
+                        <span>{tab.loading ? "Cargando..." : needle ? "Sin coincidencias" : `No hay ${config.label} para mostrar.`}</span>
+                        {!tab.loading && (
+                          <button className="toolbar-button" onClick={onRefresh}>
+                            <RefreshCw size={16} />
+                            Reintentar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {selectedRow && (
+          <ResourceInspector
+            item={selectedRow}
+            config={config}
+            onDescribe={onDescribe}
+            onYaml={onYaml}
+            onLogs={onLogs}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+function ResourceInspector({
+  item,
+  config,
+  onDescribe,
+  onYaml,
+  onLogs
+}: {
+  item: KubeItem;
+  config: ResourceConfig;
+  onDescribe: () => void;
+  onYaml: () => void;
+  onLogs: () => void;
+}) {
+  const labels = Object.entries(item.metadata?.labels ?? {});
+  const statusColumn = config.columns.find((column) => column.key === "status");
+  const status = statusColumn?.getter(item);
+  return (
+    <aside className="resource-inspector">
+      <div>
+        <span className="inspector-eyebrow">{config.label}</span>
+        <h2>{nameOf(item)}</h2>
+      </div>
+      <dl>
+        {item.metadata?.namespace && (
+          <>
+            <dt>Namespace</dt>
+            <dd>{item.metadata.namespace}</dd>
+          </>
+        )}
+        {status && (
+          <>
+            <dt>Estado</dt>
+            <dd>{renderTableCell("status", status)}</dd>
+          </>
+        )}
+        <dt>Edad</dt>
+        <dd>{age(item.metadata?.creationTimestamp)}</dd>
+        <dt>Labels</dt>
+        <dd>{labels.length}</dd>
+      </dl>
+      {labels.length > 0 && (
+        <div className="label-chip-list">
+          {labels.slice(0, 8).map(([key, value]) => (
+            <span key={key}>{key}={value}</span>
+          ))}
+          {labels.length > 8 && <span>+{labels.length - 8}</span>}
+        </div>
+      )}
+      <div className="inspector-actions">
+        <button className="toolbar-button" onClick={onDescribe}>
+          <ScrollText size={16} />
+          Describir
+        </button>
+        <button className="toolbar-button" onClick={onYaml}>
+          <FileCode2 size={16} />
+          YAML
+        </button>
+        {config.key === "pods" && (
+          <button className="toolbar-button" onClick={onLogs}>
+            <SquareTerminal size={16} />
+            Logs
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -1677,18 +2102,22 @@ function resourceBadgeClass(value: string): string {
 function OutputPanel({
   title,
   output,
+  command,
   streaming,
   loading,
   onStop,
   onInterrupt,
+  onCopy,
   onBack
 }: {
   title: string;
   output: string;
+  command?: string;
   streaming?: boolean;
   loading?: boolean;
   onStop?: () => void;
   onInterrupt?: () => void;
+  onCopy?: (text: string, label?: string) => void;
   onBack?: () => void;
 }) {
   return (
@@ -1702,18 +2131,32 @@ function OutputPanel({
           )}
           <h1>{title || "Salida"}</h1>
         </div>
-        {loading && onInterrupt && (
-          <button className="toolbar-button danger" onClick={onInterrupt}>
-            <Square size={16} />
-            Interrumpir
-          </button>
-        )}
-        {!loading && streaming && onStop && (
-          <button className="toolbar-button danger" onClick={onStop}>
-            <Square size={16} />
-            Detener
-          </button>
-        )}
+        <div className="panel-actions">
+          {command && !loading && (
+            <button className="toolbar-button" onClick={() => onCopy?.(command, "Comando")}>
+              <Copy size={16} />
+              Comando
+            </button>
+          )}
+          {output && !loading && (
+            <button className="toolbar-button" onClick={() => onCopy?.(output, "Salida")}>
+              <Copy size={16} />
+              Salida
+            </button>
+          )}
+          {loading && onInterrupt && (
+            <button className="toolbar-button danger" onClick={onInterrupt}>
+              <Square size={16} />
+              Interrumpir
+            </button>
+          )}
+          {!loading && streaming && onStop && (
+            <button className="toolbar-button danger" onClick={onStop}>
+              <Square size={16} />
+              Detener
+            </button>
+          )}
+        </div>
       </div>
       {loading ? (
         <div className="loading-state">
@@ -1840,6 +2283,7 @@ function LogsPanel({
   notice,
   expanded,
   onToggleExpand,
+  onCopy,
   onBack,
   onResume,
   onStop
@@ -1860,6 +2304,7 @@ function LogsPanel({
   notice?: string;
   expanded?: boolean;
   onToggleExpand?: () => void;
+  onCopy?: (text: string, label?: string) => void;
   onBack?: () => void;
   onResume?: () => void;
   onStop?: () => void;
@@ -2054,6 +2499,12 @@ function LogsPanel({
           <button className="toolbar-button" onClick={() => setPretty((value) => !value)}>
             {pretty ? "Ver crudo" : "Ver formateado"}
           </button>
+          {output && (
+            <button className="toolbar-button" onClick={() => onCopy?.(output, "Logs")}>
+              <Copy size={16} />
+              Copiar
+            </button>
+          )}
           {onToggleExpand && (
             <button
               className={`toolbar-button ${expanded ? "active" : ""}`}
@@ -2211,7 +2662,8 @@ function TerminalPanel({
   streaming,
   onChange,
   onRun,
-  onStop
+  onStop,
+  onCopy
 }: {
   command: string;
   output: string;
@@ -2220,6 +2672,7 @@ function TerminalPanel({
   onChange: (value: string) => void;
   onRun: () => void;
   onStop?: () => void;
+  onCopy?: (text: string, label?: string) => void;
 }) {
   return (
     <div className="terminal-panel">
@@ -2239,10 +2692,18 @@ function TerminalPanel({
             Detener
           </button>
         ) : (
-          <button className="toolbar-button" disabled={loading} onClick={onRun}>
-            <Play size={16} />
-            Ejecutar
-          </button>
+          <>
+            {output.trim() && (
+              <button className="toolbar-button" onClick={() => onCopy?.(output, "Terminal")}>
+                <Copy size={16} />
+                Copiar
+              </button>
+            )}
+            <button className="toolbar-button" disabled={loading} onClick={onRun}>
+              <Play size={16} />
+              Ejecutar
+            </button>
+          </>
         )}
       </div>
       <pre>{output || " "}</pre>
@@ -2281,7 +2742,7 @@ function ApplyPanel({
               <ArrowLeft size={18} />
             </button>
           )}
-          <h1>{editMode ? "Editar recurso" : "Apply YAML"}</h1>
+          <h1>{editMode ? "Editar recurso" : "Aplicar YAML"}</h1>
         </div>
         <div className="button-row">
           {fetching && onInterrupt ? (
@@ -2294,7 +2755,7 @@ function ApplyPanel({
               {!editMode && (
                 <button className="toolbar-button" onClick={onPick}>
                   <FolderPlus size={16} />
-                  Archivo
+                  Cargar archivo
                 </button>
               )}
               <button className="toolbar-button primary" onClick={onApply} disabled={loading || !yaml.trim()}>

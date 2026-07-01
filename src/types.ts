@@ -25,10 +25,21 @@ export type PickedYamlFile = {
   content: string;
 };
 
+export type KubeconfigInspection = {
+  path: string;
+  exists: boolean;
+  contexts: string[];
+  ok: boolean;
+  error?: string;
+  command?: string;
+};
+
 export type kubeuiApi = {
   getSettings: () => Promise<Settings>;
   addKubeconfigs: () => Promise<Pick<Settings, "kubeconfigPaths">>;
   removeKubeconfig: (kubeconfigPath: string) => Promise<Pick<Settings, "kubeconfigPaths">>;
+  inspectKubeconfigs: () => Promise<KubeconfigInspection[]>;
+  revealKubeconfig: (kubeconfigPath: string) => Promise<boolean>;
   runKubectl: (request: KubectlRequest) => Promise<KubectlResult>;
   runManualKubectl: (request: {
     command: string;
@@ -49,6 +60,7 @@ export type kubeuiApi = {
     namespace?: string;
   }) => Promise<KubectlResult>;
   pickYamlFile: () => Promise<PickedYamlFile | null>;
+  writeClipboard: (text: string) => void;
   streamKubectl: (
     request: {
       args?: string[];
