@@ -17,6 +17,12 @@
   border-radius: 6px;
 }
 
+.terminal-output {
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
+}
+
 .apply-panel textarea {
   width: 100%;
   min-width: 0;

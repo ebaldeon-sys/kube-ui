@@ -405,14 +405,15 @@
 
 .logs-vspace {
   position: relative;
-  width: 100%;
+  min-width: 100%;
 }
 
 .logs-vrows {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  min-width: 100%;
+  width: max-content;
   will-change: transform;
 }
 
@@ -420,11 +421,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 100%;
+  width: max-content;
   padding: 0 16px;
   color: #d8e0ec;
   border-left: 3px solid transparent;
   white-space: nowrap;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .log-vrow.clickable {
@@ -451,11 +454,24 @@
 }
 
 .log-vrow .log-message {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   white-space: nowrap;
+}
+
+.logs-raw-scroll {
+  overflow: auto;
+}
+
+.log-raw-row {
+  cursor: pointer;
+}
+
+.log-raw-message {
+  flex: 0 0 auto;
+  white-space: pre;
 }
 
 .log-detail {

@@ -1,4 +1,5 @@
 import { ArrowLeft, Copy, FolderPlus, Play, RefreshCw, Square, SquareTerminal } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 export function OutputPanel({
   title,
@@ -82,6 +83,14 @@ export function TerminalPanel({
   onStop?: () => void;
   onCopy?: (text: string, label?: string) => void;
 }) {
+  const outputRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    const el = outputRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [output]);
+
   return (
     <div className="terminal-panel">
       <div className="terminal-input">
@@ -114,7 +123,7 @@ export function TerminalPanel({
           </>
         )}
       </div>
-      <pre>{output || " "}</pre>
+      <pre ref={outputRef} className="terminal-output">{output || " "}</pre>
     </div>
   );
 }

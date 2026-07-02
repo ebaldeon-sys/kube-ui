@@ -230,13 +230,13 @@ export function LogsPanel({
 
   const activeLevelSet = useMemo(() => new Set(activeLevelFilters), [activeLevelFilters]);
   const displayIndexes = useMemo(() => {
-    if (!activeLevelSet.size) return lines.map((_, index) => index);
+    if (!pretty || !activeLevelSet.size) return lines.map((_, index) => index);
     const result: number[] = [];
     for (let i = 0; i < lines.length; i++) {
       if (activeLevelSet.has(levelBucket(getParsed(lines[i]).level))) result.push(i);
     }
     return result;
-  }, [lines, activeLevelSet, getParsed]);
+  }, [lines, pretty, activeLevelSet, getParsed]);
 
   useEffect(() => {
     if (!pretty) {
@@ -296,12 +296,16 @@ export function LogsPanel({
     if (!needle) return [] as number[];
     const result: number[] = [];
     for (const index of displayIndexes) {
-      const entry = getParsed(lines[index]);
-      const haystack = `${entry.time ?? ""} ${entry.level ?? ""} ${entry.message} ${entry.source ?? ""}`.toLowerCase();
+      const haystack = pretty
+        ? (() => {
+            const entry = getParsed(lines[index]);
+            return `${entry.time ?? ""} ${entry.level ?? ""} ${entry.message} ${entry.source ?? ""}`.toLowerCase();
+          })()
+        : lines[index].toLowerCase();
       if (haystack.includes(needle)) result.push(index);
     }
     return result;
-  }, [displayIndexes, lines, term, getParsed]);
+  }, [displayIndexes, lines, pretty, term, getParsed]);
 
   const matchSet = useMemo(() => new Set(matches), [matches]);
   const currentLine = matches.length ? matches[Math.min(activeMatch, matches.length - 1)] : -1;
@@ -320,7 +324,7 @@ export function LogsPanel({
   // Medir alto del viewport del scroll.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !pretty) return;
+    if (!el) return;
     const observer = new ResizeObserver(() => setViewportH(el.clientHeight));
     observer.observe(el);
     setViewportH(el.clientHeight);
@@ -330,7 +334,7 @@ export function LogsPanel({
   // Auto-scroll al final mientras llegan logs (si el usuario esta al fondo).
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !pretty) return;
+    if (!el) return;
     if (followTail) {
       el.scrollTop = el.scrollHeight;
       setScrollTop(el.scrollTop);
@@ -354,7 +358,6 @@ export function LogsPanel({
         event.preventDefault();
         if (searchDisabled) return;
         setSearchOpen(true);
-        onPrettyChange?.(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 0);
       } else if (event.key === "Escape" && searchOpen) {
         setSearchOpen(false);
@@ -499,7 +502,6 @@ export function LogsPanel({
             title={searchDisabled ? "Disponible cuando termine de cargar" : "Buscar (Ctrl+F)"}
             disabled={searchDisabled}
             onClick={() => {
-              onPrettyChange?.(true);
               setSearchOpen((value) => !value);
               window.setTimeout(() => searchInputRef.current?.focus(), 0);
             }}
@@ -732,7 +734,28 @@ export function LogsPanel({
           </div>
         </div>
       ) : (
-        <pre>{output}</pre>
+        <div className="logs-vscroll logs-raw-scroll" ref={scrollRef} onScroll={onScroll}>
+          <div className="logs-vspace" style={{ height: totalHeight }}>
+            <div className="logs-vrows" style={{ transform: `translateY(${startIndex * LOG_ROW_H}px)` }}>
+              {visible.map((position) => {
+                const index = displayIndexes[position];
+                const line = lines[index];
+                const isMatch = matchSet.has(index);
+                const isCurrent = index === currentLine;
+                return (
+                  <div
+                    key={index}
+                    className={`log-vrow log-raw-row${isMatch ? " is-match" : ""}${isCurrent ? " is-current" : ""}${selected === index ? " is-selected" : ""}`}
+                    style={{ height: LOG_ROW_H }}
+                    onClick={() => setSelected((current) => (current === index ? null : index))}
+                  >
+                    <span className="log-raw-message">{term ? highlightText(line, term) : line}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {selectedEntry && (
