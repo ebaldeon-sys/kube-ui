@@ -21,7 +21,7 @@ body,
 
 body {
   margin: 0;
-  min-width: 1040px;
+  min-width: 0;
   overflow: hidden;
   background: #e8edf4;
 }

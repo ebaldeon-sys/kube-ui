@@ -218,8 +218,8 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 1040,
-    minHeight: 680,
+    minWidth: 860,
+    minHeight: 620,
     title: "kubeui",
     backgroundColor: "#eef2f7",
     autoHideMenuBar: true,

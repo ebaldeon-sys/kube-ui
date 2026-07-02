@@ -42,7 +42,7 @@
 }
 
 .resource-table-body.with-inspector {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 24vw, 320px);
 }
 
 .table-error,
@@ -91,6 +91,19 @@
   padding: 14px;
   background: #fbfdff;
   border-left: 1px solid var(--kube-line-soft);
+}
+
+@media (max-width: 1180px) {
+  .resource-table-body.with-inspector {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .resource-inspector {
+    max-height: 260px;
+    border-top: 1px solid var(--kube-line-soft);
+    border-left: 0;
+  }
 }
 
 .resource-inspector h2 {

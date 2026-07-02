@@ -18,6 +18,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   height: 46px;
   padding: 0 10px;
   background: #0f1626;
@@ -45,16 +46,18 @@
   gap: 6px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .tabstrip-tab-list {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  max-width: none;
   min-width: 0;
-  overflow: hidden;
 }
 
 .chrome-tab {
@@ -65,7 +68,7 @@
   min-width: 70px;
   max-width: 220px;
   padding: 0 12px;
-  flex: 1 1 180px;
+  flex: 0 1 180px;
   color: #aeb9cc;
   background: #1c2638;
   border-radius: 8px 8px 0 0;
@@ -262,12 +265,13 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: 244px 1fr;
+  grid-template-columns: minmax(220px, 244px) minmax(0, 1fr);
+  min-width: 0;
   min-height: 0;
 }
 
 .workspace.collapsed {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .sidebar {
@@ -361,6 +365,7 @@
   min-height: 0;
   padding: 18px;
   gap: 14px;
+  overflow: hidden;
 }
 
 .banner {
@@ -374,6 +379,7 @@
 .session-bar {
   display: flex;
   align-items: end;
+  flex-wrap: wrap;
   gap: 12px;
   min-width: 0;
   padding: 12px;
@@ -385,6 +391,8 @@
 .session-bar label {
   display: grid;
   gap: 5px;
+  flex: 1 1 220px;
+  min-width: 160px;
   color: #667085;
   font-size: 12px;
 }
@@ -405,6 +413,17 @@
   background: #f8fafc;
   border: 1px solid #cbd5e4;
   border-radius: 6px;
+}
+
+.session-bar .select-wrap {
+  min-width: 0;
+  width: 100%;
+}
+
+.session-bar .select-wrap select,
+.session-bar .select-wrap input {
+  width: 100%;
+  min-width: 0;
 }
 
 .select-wrap input {
@@ -440,8 +459,9 @@
 }
 
 .session-bar code {
-  flex: 1;
-  min-width: 180px;
+  flex: 999 1 320px;
+  min-width: min(280px, 100%);
+  max-width: 100%;
   overflow-x: auto;
   padding: 9px 10px;
   color: #43516a;
@@ -449,6 +469,12 @@
   border: 1px solid #d8e0ec;
   border-radius: 6px;
   white-space: nowrap;
+}
+
+.session-bar .toolbar-button,
+.session-bar .icon-button {
+  flex: 0 0 auto;
+  margin-left: 0;
 }
 
 .toolbar-button {
