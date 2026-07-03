@@ -96,11 +96,20 @@ npm run dist
 
 Genera paquetes con Electron Builder. La salida queda en `release/`.
 
-En Windows tambien puedes usar:
+### Calidad de codigo
 
-```bat
-package-windows.bat
+```bash
+npm run lint          # ESLint sobre src/ y electron/
+npm run format        # Formatea con Prettier
+npm run format:check  # Verifica formato (usado en CI)
+npm run typecheck     # Comprobacion de tipos del renderer
+npm test              # Tests con Vitest
+npm run make-icons    # Regenera build/icon.ico/.icns desde image/kubeuiimage.png
 ```
+
+Un hook de `pre-commit` (husky + lint-staged) formatea y valida los archivos
+en stage antes de cada commit. La CI (GitHub Actions) corre lint, formato,
+typecheck, tests y build en cada push/PR a `main`.
 
 ## Funciones principales
 
@@ -164,13 +173,19 @@ Estos valores se configuran en `src/app/constants.ts`.
 ```text
 electron/
   main.ts          Proceso principal de Electron e IPC hacia kubectl.
-  preload.ts       API segura expuesta al renderer.
-  preload.cjs      Preload usado por Electron al ejecutar la app.
+  kubectl-args.ts  Logica pura de construccion/validacion de argumentos.
+  preload.cjs      Preload (fuente unica) que expone la API al renderer.
+
+shared/
+  types.d.ts       Tipos de IPC compartidos entre main y renderer.
+
+build/
+  icon.ico/.icns/.png  Iconos de la app (generados con make-icons).
 
 src/
   App.tsx          Orquestador principal de vistas y acciones.
-  main.tsx         Entrada React.
-  types.ts         Tipos compartidos con la API expuesta por preload.
+  main.tsx         Entrada React (con ErrorBoundary).
+  types.ts         Tipos del renderer (re-exporta los de shared/).
 
   app/
     constants.ts   Constantes de UI, logs y pestanas.
@@ -178,6 +193,9 @@ src/
     types.ts       Tipos internos de recursos, tabs, logs y streams.
 
   components/
+    ErrorBoundary.tsx  Captura errores de render y evita la pantalla blanca.
+    dialogs/       Modales: confirmacion, input y detalle.
+    layout/        TabStrip, SessionBar, Sidebar y StatusBar.
     logs/          Vista y controles de logs.
     output/        Paneles de salida, terminal y apply.
     resources/     Tabla de recursos y acciones por recurso.
@@ -187,12 +205,13 @@ src/
     resources.ts   Definicion de recursos Kubernetes, columnas y categorias.
 
   hooks/
-    useClipboard.ts  Copiado y notificaciones temporales.
-    useDialogs.ts    Dialogos internos de confirmacion, input y detalle.
-    useLogs.ts       Preferencias, ejecucion y estado de logs.
-    useResources.ts  Carga de recursos con `kubectl get -o json`.
-    useStream.ts     Ciclo de vida de streams de kubectl.
-    useTabs.ts       Estado de pestanas y modo de vista.
+    useClipboard.ts       Copiado y notificaciones temporales.
+    useDialogs.ts         Dialogos internos de confirmacion, input y detalle.
+    useLogs.ts            Preferencias, ejecucion y estado de logs.
+    useResourceActions.ts Acciones de kubectl (delete, scale, edit, apply...).
+    useResources.ts       Carga de recursos con `kubectl get -o json`.
+    useStream.ts          Ciclo de vida de streams de kubectl.
+    useTabs.ts            Estado de pestanas y modo de vista.
 
   kubectl/
     format.ts      Formateo de comandos, errores y salidas.
@@ -219,25 +238,46 @@ src/
 ## Flujo interno
 
 1. El renderer llama metodos expuestos en `window.kubeui`.
-2. `electron/preload.ts` envia solicitudes IPC al proceso principal.
+2. `electron/preload.cjs` envia solicitudes IPC al proceso principal.
 3. `electron/main.ts` ejecuta `kubectl` con `spawn`, construye `KUBECONFIG`, agrega `--context` y namespace cuando aplica.
 4. El resultado vuelve al renderer como salida estructurada: `ok`, `stdout`, `stderr`, `code` y `command`.
 5. Los comandos de logs y terminal usan streams IPC para mostrar salida progresiva.
 
 ## Empaquetado
 
-Electron Builder esta configurado en `package.json`.
+Electron Builder esta configurado en `package.json`. Los iconos se generan desde
+`image/kubeuiimage.png` hacia `build/icon.ico` (Windows), `.icns` (macOS) y
+`.png` (Linux) con `npm run make-icons`. La salida de los paquetes queda en
+`release/`.
 
-Targets configurados:
+Los paquetes **no van firmados** (ni notarizados). Consecuencias:
 
-- macOS: `dmg` y `zip`.
-- Windows: `portable` y `nsis`.
+- Windows: el `.exe` funciona; muestra un aviso de SmartScreen (editor
+  desconocido) que se acepta con "Mas informacion > Ejecutar de todos modos".
+- macOS: el `.dmg`/`.zip` sirve para uso local (abrir con clic derecho >
+  Abrir). No es distribuible a otros Macs sin un Developer ID de Apple.
 
-Salida:
+### Generar el ejecutable de Windows desde macOS
 
-```text
-release/
+`package-windows-docker.sh` compila el `.exe` **portable** (un unico ejecutable,
+ideal para compartir) usando la imagen oficial de electron-builder con Wine via
+Docker, sin instalar Wine en el equipo:
+
+```bash
+./package-windows-docker.sh
 ```
+
+El resultado es `release/kubeui-<version>-portable.exe`. El instalador NSIS no
+puede construirse bajo la emulacion de Apple Silicon; requiere Windows real o CI.
+
+### Generar el paquete de macOS
+
+```bash
+./package-macos.sh    # dmg + zip sin firma
+```
+
+Targets configurados: macOS `dmg`/`zip`, Windows `portable`/`nsis` (x64),
+Linux `AppImage`/`deb`.
 
 ## Notas y limitaciones
 
