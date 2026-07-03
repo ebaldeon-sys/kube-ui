@@ -155,8 +155,22 @@ function createWindow() {
     webPreferences: {
       preload: path.join(currentDir, "../electron/preload.cjs"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // El preload solo usa contextBridge/ipcRenderer, compatibles con sandbox.
+      sandbox: true
     }
+  });
+
+  // Hardening: la app no debe abrir ventanas nuevas ni navegar a URLs externas.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Los enlaces externos se abren en el navegador del sistema, nunca en la app.
+    if (/^https?:\/\//.test(url)) shell.openExternal(url).catch(() => undefined);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const devUrl = process.env.VITE_DEV_SERVER_URL;
+    const allowed = isDev && devUrl ? url.startsWith(devUrl) : url.startsWith("file://");
+    if (!allowed) event.preventDefault();
   });
 
   if (isDev) {
@@ -175,8 +189,22 @@ function createWindow() {
   }
 }
 
+// Menu minimo con roles estandar. Sin el, en macOS no funcionan los atajos de
+// portapapeles (Cmd+C/V/X/A) ni Cmd+Q. En Windows/Linux queda oculto
+// (autoHideMenuBar) pero mantiene los aceleradores activos.
+function buildAppMenu() {
+  const isMac = process.platform === "darwin";
+  const template: Parameters<typeof Menu.buildFromTemplate>[0] = [
+    ...(isMac ? [{ role: "appMenu" as const }] : []),
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null);
+  buildAppMenu();
   applyContentSecurityPolicy();
   createWindow();
 

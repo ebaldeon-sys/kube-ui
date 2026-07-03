@@ -1,7 +1,12 @@
 #!/bin/zsh
-# Compila el instalador/portable de Windows (.exe) SIN FIRMA desde macOS/Linux
+# Compila el ejecutable PORTABLE de Windows (.exe) SIN FIRMA desde macOS/Linux
 # usando la imagen oficial de electron-builder con Wine (via Docker). No requiere
 # instalar Wine en el equipo. El resultado queda en release/.
+#
+# Solo se genera el target "portable" (un unico .exe autocontenido, ideal para
+# compartir). El instalador NSIS NO se puede construir aqui: requiere que Wine
+# ejecute un stub y eso falla bajo la emulacion qemu de Apple Silicon. Para
+# generar el instalador NSIS hay que compilar en Windows real o en CI.
 #
 # Uso:  ./package-windows-docker.sh
 set -euo pipefail
@@ -37,7 +42,7 @@ docker run --rm \
   -v "$PWD":/project \
   -v kubeui-wine-node-modules:/project/node_modules \
   "$IMAGE" \
-  /bin/bash -c "npm ci && npm run build && npx electron-builder --win --publish never"
+  /bin/bash -c "npm ci && npm run build && npx electron-builder --win portable --publish never"
 
 echo
 echo "Listo. Revisa la carpeta release/:"

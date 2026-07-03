@@ -1,3 +1,7 @@
+// Fuente unica del preload. Se mantiene en CommonJS (.cjs) a proposito: el
+// paquete es "type: module" y el preload en modo sandbox debe cargarse como
+// CommonJS. La forma de este objeto debe coincidir con el tipo `kubeuiApi`
+// declarado en src/types.ts (la comprobacion es manual: manten ambos en sync).
 const { contextBridge, ipcRenderer } = require("electron");
 
 const STREAM_CHANNEL = "kubectl:stream:event";
