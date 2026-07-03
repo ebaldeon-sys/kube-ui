@@ -14,7 +14,8 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"electron/**/*.ts\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "make-icons": "node scripts/make-icons.mjs"
   },
   "keywords": [
     "kubernetes",
@@ -49,6 +50,7 @@
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
     "jsdom": "^25.0.1",
+    "png2icons": "^2.0.1",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
@@ -69,9 +71,12 @@
       "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "mac": {
+      "icon": "build/icon.icns",
+      "identity": null,
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
@@ -79,6 +84,7 @@
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "category": "Development",
       "target": [
         "AppImage",
@@ -86,9 +92,16 @@
       ]
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
-        "portable",
-        "nsis"
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
       ]
     },
     "nsis": {
@@ -96,6 +109,9 @@
       "perMachine": false,
       "allowElevation": false,
       "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
     }
   }
 }
