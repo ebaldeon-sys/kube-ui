@@ -72,9 +72,17 @@
       "output": "release"
     },
     "mac": {
+      "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
         "zip"
+      ]
+    },
+    "linux": {
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb"
       ]
     },
     "win": {
