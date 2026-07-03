@@ -46,9 +46,7 @@
   display: grid;
   place-items: center;
   color: #92a2b8;
-  background:
-    linear-gradient(180deg, rgba(16, 29, 49, 0.72), rgba(7, 17, 31, 0.96)),
-    var(--kube-console);
+  background: linear-gradient(180deg, rgba(16, 29, 49, 0.72), rgba(7, 17, 31, 0.96)), var(--kube-console);
   border-top: 1px solid #14233a;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;

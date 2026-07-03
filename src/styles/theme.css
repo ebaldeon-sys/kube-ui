@@ -29,9 +29,7 @@
 }
 
 body {
-  background:
-    linear-gradient(180deg, #f6f9fc 0, var(--kube-bg) 280px),
-    var(--kube-bg);
+  background: linear-gradient(180deg, #f6f9fc 0, var(--kube-bg) 280px), var(--kube-bg);
   color: var(--kube-text);
 }
 
@@ -105,9 +103,7 @@ body {
 .sidebar {
   gap: 18px;
   padding: 16px 12px;
-  background:
-    linear-gradient(180deg, var(--kube-navy-2), var(--kube-navy) 55%),
-    var(--kube-navy);
+  background: linear-gradient(180deg, var(--kube-navy-2), var(--kube-navy) 55%), var(--kube-navy);
   color: #d7e2f0;
   border-right: 1px solid #22314a;
 }
@@ -387,7 +383,9 @@ td {
 }
 
 tbody tr {
-  transition: background 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 tbody tr:hover {

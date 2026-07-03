@@ -47,13 +47,15 @@ function AppInner() {
   const [globalMessage, setGlobalMessage] = useState("");
   const { toastMessage, copyToClipboard } = useClipboard(setGlobalMessage);
   const [namespaceDraft, setNamespaceDraft] = useState("");
-  const { streamOwner, streamOwnerRef, stopStreamRef, logBufferRef, logFlushTimerRef, setCurrentStreamOwner, stopStream } = useStream(setTabs);
+  const { streamOwner, streamOwnerRef, stopStreamRef, logBufferRef, logFlushTimerRef, setCurrentStreamOwner, stopStream } =
+    useStream(setTabs);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Vista ampliada de logs: oculta tabstrip, sidebar, barra de sesion y statusbar.
   const [logsExpanded, setLogsExpanded] = useState(false);
   // Vista a la que regresar al cerrar la configuracion (kubeconfig).
   const [settingsReturn, setSettingsReturn] = useState<ViewMode>("table");
-  const { detailDialog, setDetailDialog, confirmDialog, setConfirmDialog, inputDialog, setInputDialog, requestConfirm, requestInput } = useDialogs();
+  const { detailDialog, setDetailDialog, confirmDialog, setConfirmDialog, inputDialog, setInputDialog, requestConfirm, requestInput } =
+    useDialogs();
 
   const activeStreamOwner = streamOwner?.tabId === activeTabId ? streamOwner : null;
   const streaming = Boolean(activeStreamOwner);
@@ -163,7 +165,9 @@ function AppInner() {
     } catch {
       parsed = {};
     }
-    const entries = (parsed.contexts ?? []).filter((entry): entry is { name: string; context?: { namespace?: string } } => Boolean(entry?.name));
+    const entries = (parsed.contexts ?? []).filter((entry): entry is { name: string; context?: { namespace?: string } } =>
+      Boolean(entry?.name)
+    );
     const nextContexts = entries.map((entry) => entry.name);
     // El kubeconfig define un namespace por contexto: lo leemos aunque el cluster no permita listar namespaces.
     const nsMap: Record<string, string> = {};
@@ -185,7 +189,15 @@ function AppInner() {
       return current.map((tab) =>
         nextContexts.includes(tab.context)
           ? tab
-          : { ...tab, context: nextContexts[0], title: nextContexts[0], namespace: nsMap[nextContexts[0]] ?? "default", rows: [], selectedName: "", selectedNames: [] }
+          : {
+              ...tab,
+              context: nextContexts[0],
+              title: nextContexts[0],
+              namespace: nsMap[nextContexts[0]] ?? "default",
+              rows: [],
+              selectedName: "",
+              selectedNames: []
+            }
       );
     });
   }, [kubeconfigPaths, showAppError]);
@@ -220,20 +232,26 @@ function AppInner() {
   );
 
   useEffect(() => {
-    window.kubeui.getSettings().then(setSettings).catch((error) => showAppError("No se pudo leer la configuracion", error));
+    window.kubeui
+      .getSettings()
+      .then(setSettings)
+      .catch((error) => showAppError("No se pudo leer la configuracion", error));
   }, [showAppError]);
 
   useEffect(() => {
     if (!settings) return;
-    window.kubeui.runKubectl({ args: ["version", "--client"], kubeconfigPaths }).then(setKubectlStatus).catch((error) =>
-      setKubectlStatus({
-        ok: false,
-        code: null,
-        stdout: "",
-        stderr: unknownMessage(error),
-        command: "kubectl version --client"
-      })
-    );
+    window.kubeui
+      .runKubectl({ args: ["version", "--client"], kubeconfigPaths })
+      .then(setKubectlStatus)
+      .catch((error) =>
+        setKubectlStatus({
+          ok: false,
+          code: null,
+          stdout: "",
+          stderr: unknownMessage(error),
+          command: "kubectl version --client"
+        })
+      );
     refreshContexts();
   }, [settings, kubeconfigPaths, refreshContexts]);
 
@@ -309,7 +327,14 @@ function AppInner() {
     const next = namespaceDraft.trim() || "default";
     if (next !== activeTab.namespace) {
       const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
-      updateActiveTab({ namespace: next, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
+      updateActiveTab({
+        namespace: next,
+        rows: [],
+        selectedName: "",
+        selectedNames: [],
+        runState: stopped ? "stopped" : "idle",
+        runLabel: stopped ? "Detenido por cambio de namespace" : ""
+      });
     } else if (next !== namespaceDraft) {
       setNamespaceDraft(next);
     }
@@ -471,7 +496,14 @@ function AppInner() {
     // Auto-confirmar si el valor coincide con una sugerencia (seleccion del datalist).
     if (namespaces.includes(value) && value !== activeTab.namespace) {
       const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
-      updateActiveTab({ namespace: value, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
+      updateActiveTab({
+        namespace: value,
+        rows: [],
+        selectedName: "",
+        selectedNames: [],
+        runState: stopped ? "stopped" : "idle",
+        runLabel: stopped ? "Detenido por cambio de namespace" : ""
+      });
     }
   };
 
@@ -573,8 +605,12 @@ function AppInner() {
               onSelect={(name) => updateActiveTab({ selectedName: name })}
               onTogglePodSelection={togglePodSelection}
               onSetPodSelection={setPodSelection}
-              onDescribe={() => selectedName && showOutput("details", ["describe", selectedConfig.kubectlName, selectedName], `Describe ${selectedName}`)}
-              onYaml={() => selectedName && showOutput("yaml", ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], `YAML ${selectedName}`)}
+              onDescribe={() =>
+                selectedName && showOutput("details", ["describe", selectedConfig.kubectlName, selectedName], `Describe ${selectedName}`)
+              }
+              onYaml={() =>
+                selectedName && showOutput("yaml", ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], `YAML ${selectedName}`)
+              }
               onLogs={() => selectedName && runLogs()}
               onEdit={editResource}
               onDelete={deleteResource}

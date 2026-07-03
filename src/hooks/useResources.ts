@@ -47,9 +47,7 @@ export function useResources({ kubeconfigPaths, setGlobalMessage, setTabs, updat
         candidate.context === targetContext &&
         (!config.namespaced || candidate.namespace === targetNamespace);
       const applyIfCurrent = (patch: Partial<TabSession>) =>
-        setTabs((current) =>
-          current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item))
-        );
+        setTabs((current) => current.map((item) => (item.id === tab.id && stillTarget(item) ? { ...item, ...patch } : item)));
 
       if (!silent) {
         updateTab(tab.id, {
@@ -84,7 +82,11 @@ export function useResources({ kubeconfigPaths, setGlobalMessage, setTabs, updat
           runLabel: `Error: ${config.label}`,
           outputTitle: "Error",
           output: unknownMessage(error),
-          lastCommand: formatKubectlCommand(["get", config.kubectlName, "-o", "json"], tab.context, config.namespaced ? tab.namespace : undefined),
+          lastCommand: formatKubectlCommand(
+            ["get", config.kubectlName, "-o", "json"],
+            tab.context,
+            config.namespaced ? tab.namespace : undefined
+          ),
           rows: []
         });
         return;

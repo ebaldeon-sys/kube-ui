@@ -17,9 +17,7 @@ describe("formatKubectlCommand", () => {
   });
 
   it("no duplica flags presentes", () => {
-    expect(formatKubectlCommand(["get", "pods", "-n", "kube-system"], "dev", "web")).toBe(
-      "kubectl --context dev get pods -n kube-system"
-    );
+    expect(formatKubectlCommand(["get", "pods", "-n", "kube-system"], "dev", "web")).toBe("kubectl --context dev get pods -n kube-system");
   });
 
   it("entrecomilla tokens con espacios", () => {

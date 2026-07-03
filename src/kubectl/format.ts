@@ -6,9 +6,7 @@ export function formatKubectlCommand(args: string[], context?: string, namespace
   if (context && !hasFlag("--context")) full.push("--context", context);
   if (namespace && !hasFlag("-n") && !hasFlag("--namespace")) full.push("-n", namespace);
   full.push(...args);
-  return ["kubectl", ...full]
-    .map((value) => (/^[A-Za-z0-9_./:=@-]+$/.test(value) ? value : JSON.stringify(value)))
-    .join(" ");
+  return ["kubectl", ...full].map((value) => (/^[A-Za-z0-9_./:=@-]+$/.test(value) ? value : JSON.stringify(value))).join(" ");
 }
 
 export function unknownMessage(error: unknown): string {

@@ -1,4 +1,18 @@
-import { AlertTriangle, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCcw, Scale3D, ScrollText, Search, SquareTerminal, Trash2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  FileCode2,
+  Pause,
+  Pencil,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Scale3D,
+  ScrollText,
+  Search,
+  SquareTerminal,
+  Trash2,
+  X
+} from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { KubeItem, ResourceConfig, TabSession } from "../../app/types";
 import { age, nameOf } from "../../resources/helpers";
@@ -83,7 +97,10 @@ export function ResourceTable({
       <div className="panel-title">
         <div>
           <h1>{config.label}</h1>
-          <p>{countText}{selectionText}</p>
+          <p>
+            {countText}
+            {selectionText}
+          </p>
         </div>
         <div className="button-row">
           <button className="toolbar-button" onClick={onRefresh} disabled={busy}>
@@ -235,13 +252,7 @@ export function ResourceTable({
           </table>
         </div>
         {selectedRow && !multiPodSelection && (
-          <ResourceInspector
-            item={selectedRow}
-            config={config}
-            onDescribe={onDescribe}
-            onYaml={onYaml}
-            onLogs={onLogs}
-          />
+          <ResourceInspector item={selectedRow} config={config} onDescribe={onDescribe} onYaml={onYaml} onLogs={onLogs} />
         )}
       </div>
     </div>
@@ -291,7 +302,9 @@ function ResourceInspector({
       {labels.length > 0 && (
         <div className="label-chip-list">
           {labels.slice(0, 8).map(([key, value]) => (
-            <span key={key}>{key}={value}</span>
+            <span key={key}>
+              {key}={value}
+            </span>
           ))}
           {labels.length > 8 && <span>+{labels.length - 8}</span>}
         </div>
@@ -331,4 +344,3 @@ function resourceBadgeClass(value: string): string {
   if (normalized === "succeeded" || normalized === "completed") return "done";
   return "neutral";
 }
-

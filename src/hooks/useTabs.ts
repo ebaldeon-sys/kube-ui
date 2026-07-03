@@ -23,10 +23,13 @@ export function useTabs() {
     setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, ...patch } : tab)));
   }, []);
 
-  const setViewMode = useCallback((mode: ViewMode) => {
-    if (activeTab) updateActiveTab({ viewMode: mode });
-    else setFallbackViewMode(mode);
-  }, [activeTab, updateActiveTab]);
+  const setViewMode = useCallback(
+    (mode: ViewMode) => {
+      if (activeTab) updateActiveTab({ viewMode: mode });
+      else setFallbackViewMode(mode);
+    },
+    [activeTab, updateActiveTab]
+  );
 
   return {
     tabs,

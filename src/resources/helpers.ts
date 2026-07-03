@@ -31,7 +31,12 @@ export function ports(item: KubeItem) {
 
 export function ingressHosts(item: KubeItem) {
   const rules = (item.spec as { rules?: Array<{ host?: string }> })?.rules ?? [];
-  return rules.map((rule) => rule.host).filter(Boolean).join(", ") || "-";
+  return (
+    rules
+      .map((rule) => rule.host)
+      .filter(Boolean)
+      .join(", ") || "-"
+  );
 }
 
 export function nodeReady(item: KubeItem) {

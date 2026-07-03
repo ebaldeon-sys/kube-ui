@@ -1,6 +1,28 @@
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Copy, Maximize2, Minimize2, Pin, Play, RefreshCw, Search, Square, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Maximize2,
+  Minimize2,
+  Pin,
+  Play,
+  RefreshCw,
+  Search,
+  Square,
+  X
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ALL_LOG_CONTAINERS, LOG_LEVEL_FILTERS, LOG_OVERSCAN, LOG_ROW_H, MAX_RANGE_DAYS, SINCE_OPTIONS, emptyLevelCounts } from "../../app/constants";
+import {
+  ALL_LOG_CONTAINERS,
+  LOG_LEVEL_FILTERS,
+  LOG_OVERSCAN,
+  LOG_ROW_H,
+  MAX_RANGE_DAYS,
+  SINCE_OPTIONS,
+  emptyLevelCounts
+} from "../../app/constants";
 import type { LogLevelFilter, LogsMeta, LogsMode } from "../../app/types";
 import { K8S_TS_RE, toLocalInputValue } from "../../kubectl/logs";
 
@@ -11,6 +33,10 @@ type ParsedLog = {
   source?: string;
   json?: Record<string, unknown>;
 };
+
+// Tope del cache LRU de parsing. Acota la memoria (~pocas MB) sin el patron de
+// "cliff-edge" que vaciaba el cache entero al superar el limite.
+const PARSE_CACHE_MAX = 20_000;
 
 function pick(obj: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) {
@@ -204,12 +230,20 @@ export function LogsPanel({
   } | null>(null);
   const getParsed = useCallback((line: string) => {
     const cache = parseCache.current;
-    let entry = cache.get(line);
-    if (!entry) {
-      if (cache.size > 200_000) cache.clear();
-      entry = parseLogLine(line);
-      cache.set(line, entry);
+    const existing = cache.get(line);
+    if (existing) {
+      // LRU: marcar como reciente moviendola al final del Map.
+      cache.delete(line);
+      cache.set(line, existing);
+      return existing;
     }
+    const entry = parseLogLine(line);
+    if (cache.size >= PARSE_CACHE_MAX) {
+      // Descartar la entrada menos usada recientemente (la primera del Map).
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(line, entry);
     return entry;
   }, []);
 
@@ -373,9 +407,12 @@ export function LogsPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [searchOpen, searchDisabled]);
 
-  useEffect(() => () => {
-    resizeCleanupRef.current?.();
-  }, []);
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    []
+  );
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -398,9 +435,7 @@ export function LogsPanel({
   };
 
   const toggleLevelFilter = (level: LogLevelFilter) => {
-    const next = activeLevelFilters.includes(level)
-      ? activeLevelFilters.filter((item) => item !== level)
-      : [...activeLevelFilters, level];
+    const next = activeLevelFilters.includes(level) ? activeLevelFilters.filter((item) => item !== level) : [...activeLevelFilters, level];
     onActiveLevelFiltersChange?.(next);
   };
 
@@ -443,9 +478,7 @@ export function LogsPanel({
 
   const hasContainerSelector = containerNames.length > 1 && Boolean(onContainerChange);
   const selectedContainerValue =
-    selectedContainer === ALL_LOG_CONTAINERS || containerNames.includes(selectedContainer)
-      ? selectedContainer
-      : defaultContainer;
+    selectedContainer === ALL_LOG_CONTAINERS || containerNames.includes(selectedContainer) ? selectedContainer : defaultContainer;
   const lineSummary = activeLevelFilters.length
     ? `${displayIndexes.length.toLocaleString()} de ${lines.length.toLocaleString()} líneas`
     : `${lines.length.toLocaleString()} líneas`;
@@ -473,16 +506,10 @@ export function LogsPanel({
         <div className="panel-actions">
           {onModeChange && (
             <div className="logs-mode" role="tablist">
-              <button
-                className={`logs-mode-btn ${mode === "live" ? "active" : ""}`}
-                onClick={() => onModeChange("live")}
-              >
+              <button className={`logs-mode-btn ${mode === "live" ? "active" : ""}`} onClick={() => onModeChange("live")}>
                 En vivo
               </button>
-              <button
-                className={`logs-mode-btn ${mode === "query" ? "active" : ""}`}
-                onClick={() => onModeChange("query")}
-              >
+              <button className={`logs-mode-btn ${mode === "query" ? "active" : ""}`} onClick={() => onModeChange("query")}>
                 Histórico
               </button>
             </div>
@@ -635,13 +662,7 @@ export function LogsPanel({
           </label>
           <label>
             Fin
-            <input
-              type="datetime-local"
-              value={end}
-              min={endMin}
-              max={endMax}
-              onChange={(event) => onEndChange?.(event.target.value)}
-            />
+            <input type="datetime-local" value={end} min={endMin} max={endMax} onChange={(event) => onEndChange?.(event.target.value)} />
           </label>
           <button className="toolbar-button accent" onClick={() => onQuery?.()} disabled={streaming}>
             <Search size={16} />
@@ -706,9 +727,7 @@ export function LogsPanel({
       )}
 
       {lines.length === 0 ? (
-        <div className="logs-empty">
-          {streaming ? (mode === "query" ? "Consultando…" : "Esperando logs…") : "Sin logs"}
-        </div>
+        <div className="logs-empty">{streaming ? (mode === "query" ? "Consultando…" : "Esperando logs…") : "Sin logs"}</div>
       ) : pretty && total === 0 ? (
         <div className="logs-empty">Sin líneas para los filtros activos</div>
       ) : pretty ? (
@@ -780,7 +799,11 @@ export function LogsPanel({
               <button className={detailTab === "json" ? "active" : ""} onClick={() => setDetailTab("json")} disabled={!selectedEntry.json}>
                 JSON
               </button>
-              <button className={detailTab === "fields" ? "active" : ""} onClick={() => setDetailTab("fields")} disabled={!selectedEntry.json}>
+              <button
+                className={detailTab === "fields" ? "active" : ""}
+                onClick={() => setDetailTab("fields")}
+                disabled={!selectedEntry.json}
+              >
                 Campos
               </button>
               <button className={detailTab === "raw" ? "active" : ""} onClick={() => setDetailTab("raw")}>
@@ -802,4 +825,3 @@ export function LogsPanel({
     </div>
   );
 }
-

@@ -2,7 +2,13 @@ import { useCallback, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { ResourceConfig, StreamOwner, TabSession, ViewMode } from "../app/types";
 import { configByKey } from "../config/resources";
-import { formatKubectlCommand, isUnsupportedInteractiveCommand, kubectlErrorText, kubectlSuccessText, unknownMessage } from "../kubectl/format";
+import {
+  formatKubectlCommand,
+  isUnsupportedInteractiveCommand,
+  kubectlErrorText,
+  kubectlSuccessText,
+  unknownMessage
+} from "../kubectl/format";
 import { nameOf } from "../resources/helpers";
 import type { KubectlResult } from "../types";
 
@@ -137,7 +143,8 @@ export function useResourceActions({
       title = targets.length > 1 ? `Reiniciar ${targets.length} pods` : `Reiniciar ${targets[0]}`;
       const preview = targets.slice(0, 5).join(", ");
       const suffix = targets.length > 5 ? ` y ${targets.length - 5} más` : "";
-      confirmMessage = targets.length > 1 ? `Reiniciar ${targets.length} pods seleccionados (${preview}${suffix})?` : `Reiniciar ${targets[0]}?`;
+      confirmMessage =
+        targets.length > 1 ? `Reiniciar ${targets.length} pods seleccionados (${preview}${suffix})?` : `Reiniciar ${targets[0]}?`;
     } else if (kind === "deployments" || kind === "statefulsets" || kind === "daemonsets") {
       if (!selectedName) return;
       args = ["rollout", "restart", selectedConfig.kubectlName, selectedName];
@@ -157,7 +164,11 @@ export function useResourceActions({
     if (!["deployments", "statefulsets", "replicasets"].includes(activeTab.resource)) return;
     const replicas = await requestInput("Réplicas", "1");
     if (!replicas || !/^\d+$/.test(replicas)) return;
-    const result = await showOutput("details", ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`], `Escalar ${selectedName}`);
+    const result = await showOutput(
+      "details",
+      ["scale", selectedConfig.kubectlName, selectedName, `--replicas=${replicas}`],
+      `Escalar ${selectedName}`
+    );
     if (result?.ok) await loadResources(tab, { silent: true });
   };
 
@@ -168,7 +179,14 @@ export function useResourceActions({
     const tabId = activeTab.id;
     stopStream({ tabId, state: "stopped", label: "Detenido" });
     const token = nextActionToken(tabId);
-    updateActiveTab({ loading: true, runState: "running", runLabel: `Editar ${selectedName}`, yamlDraft: "", yamlEditMode: true, outputTitle: `Editar ${selectedName}` });
+    updateActiveTab({
+      loading: true,
+      runState: "running",
+      runLabel: `Editar ${selectedName}`,
+      yamlDraft: "",
+      yamlEditMode: true,
+      outputTitle: `Editar ${selectedName}`
+    });
     setViewMode("apply");
     let result: KubectlResult;
     try {
@@ -179,15 +197,34 @@ export function useResourceActions({
         code: null,
         stdout: "",
         stderr: unknownMessage(error),
-        command: formatKubectlCommand(["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"], activeTab.context, activeTab.namespace)
+        command: formatKubectlCommand(
+          ["get", selectedConfig.kubectlName, selectedName, "-o", "yaml"],
+          activeTab.context,
+          activeTab.namespace
+        )
       };
     }
     if (!isTabActionCurrent(tabId, token)) return;
     if (!result.ok) {
-      updateTab(tabId, { loading: false, runState: "error", runLabel: "Error: Editar recurso", viewMode: "details", outputTitle: "Error: Editar recurso", output: kubectlErrorText(result, "No se pudo obtener el YAML."), lastCommand: result.command });
+      updateTab(tabId, {
+        loading: false,
+        runState: "error",
+        runLabel: "Error: Editar recurso",
+        viewMode: "details",
+        outputTitle: "Error: Editar recurso",
+        output: kubectlErrorText(result, "No se pudo obtener el YAML."),
+        lastCommand: result.command
+      });
       return;
     }
-    updateTab(tabId, { loading: false, runState: "done", runLabel: "YAML cargado", yamlDraft: result.stdout, yamlEditMode: true, lastCommand: result.command });
+    updateTab(tabId, {
+      loading: false,
+      runState: "done",
+      runLabel: "YAML cargado",
+      yamlDraft: result.stdout,
+      yamlEditMode: true,
+      lastCommand: result.command
+    });
   };
 
   const triggerCronJob = async () => {
@@ -217,8 +254,7 @@ export function useResourceActions({
     const command = activeTab.terminalCommand;
     if (isUnsupportedInteractiveCommand(command)) {
       updateActiveTab({
-        terminalOutput:
-          `$ ${command}\n\nEste comando requiere una sesion interactiva o de larga duracion que todavia no esta soportada en esta terminal.\nUsa una terminal externa para exec -it, attach -it o port-forward.`,
+        terminalOutput: `$ ${command}\n\nEste comando requiere una sesion interactiva o de larga duracion que todavia no esta soportada en esta terminal.\nUsa una terminal externa para exec -it, attach -it o port-forward.`,
         lastCommand: command,
         runState: "error",
         runLabel: "Comando no soportado"

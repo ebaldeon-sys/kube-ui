@@ -22,7 +22,17 @@ type Props = {
   onAddTab: () => void;
 };
 
-export function TabStrip({ tabs, activeTabId, streamOwner, sidebarOpen, hasContexts, onToggleSidebar, onSelectTab, onCloseTab, onAddTab }: Props) {
+export function TabStrip({
+  tabs,
+  activeTabId,
+  streamOwner,
+  sidebarOpen,
+  hasContexts,
+  onToggleSidebar,
+  onSelectTab,
+  onCloseTab,
+  onAddTab
+}: Props) {
   return (
     <div className="tabstrip">
       <button className="sidebar-toggle" title={sidebarOpen ? "Ocultar panel" : "Mostrar panel"} onClick={onToggleSidebar}>
@@ -33,11 +43,7 @@ export function TabStrip({ tabs, activeTabId, streamOwner, sidebarOpen, hasConte
           {tabs.map((tab) => {
             const pinned = streamOwner?.tabId === tab.id && streamOwner.pinned;
             return (
-              <div
-                key={tab.id}
-                className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
-                onClick={() => onSelectTab(tab.id)}
-              >
+              <div key={tab.id} className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`} onClick={() => onSelectTab(tab.id)}>
                 <Layers3 size={15} />
                 {tab.runState !== "idle" && (
                   <span

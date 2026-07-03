@@ -10,7 +10,15 @@ import {
 } from "../app/constants";
 import type { LogsMeta, LogsMode, LogsPrefs, StreamOwner, TabRunState, TabSession, ViewMode } from "../app/types";
 import { formatKubectlCommand } from "../kubectl/format";
-import { buildLogsArgs, capLines, defaultLogContainer, lineEpoch, podContainerNames, resolveLogContainer, toLocalInputValue } from "../kubectl/logs";
+import {
+  buildLogsArgs,
+  capLines,
+  defaultLogContainer,
+  lineEpoch,
+  podContainerNames,
+  resolveLogContainer,
+  toLocalInputValue
+} from "../kubectl/logs";
 import { nameOf } from "../resources/helpers";
 
 type StopStream = (opts?: { tabId?: string; state?: TabRunState; label?: string }) => boolean;
@@ -91,7 +99,8 @@ export function useLogs({
       const since = override?.since ?? prefs.since;
       const start = override?.start ?? prefs.start;
       const end = override?.end ?? prefs.end;
-      const selectedPodForRun = activeTab.resource === "pods" ? activeTab.rows.find((item) => nameOf(item) === activeTab.selectedName) : undefined;
+      const selectedPodForRun =
+        activeTab.resource === "pods" ? activeTab.rows.find((item) => nameOf(item) === activeTab.selectedName) : undefined;
       const containerNames = podContainerNames(selectedPodForRun);
       const effectiveContainer = resolveLogContainer(selectedPodForRun, override?.container ?? prefs.container);
       const allContainers = effectiveContainer === ALL_LOG_CONTAINERS;
@@ -190,7 +199,11 @@ export function useLogs({
                 })
                 .join("\n");
             }
-            const commandError = error || (code !== null && code !== 0 ? `kubectl logs terminó con código ${code}. El detalle devuelto por kubectl está en la salida.` : "");
+            const commandError =
+              error ||
+              (code !== null && code !== 0
+                ? `kubectl logs terminó con código ${code}. El detalle devuelto por kubectl está en la salida.`
+                : "");
             const finalOut = error ? (merged ? `${merged}\n${error}` : error) : merged;
             setTabs((current) =>
               current.map((tab) =>

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from "electron";
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -43,6 +44,35 @@ const MAX_STOPPED_STREAMS = 1000;
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
+}
+
+// Persistencia del tamaño de la ventana entre sesiones. Guardamos solo el
+// tamaño (no la posicion) para evitar que la ventana quede fuera de pantalla
+// si cambia la configuracion de monitores.
+function windowStatePath() {
+  return path.join(app.getPath("userData"), "window-state.json");
+}
+
+function readWindowSize(): { width: number; height: number } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(windowStatePath(), "utf8")) as { width?: unknown; height?: unknown };
+    if (typeof parsed.width === "number" && typeof parsed.height === "number") {
+      return { width: parsed.width, height: parsed.height };
+    }
+  } catch {
+    // Sin estado previo o archivo invalido: usamos el tamaño por defecto.
+  }
+  return null;
+}
+
+function saveWindowSize(win: BrowserWindow) {
+  if (win.isDestroyed()) return;
+  try {
+    const { width, height } = win.getBounds();
+    writeFileSync(windowStatePath(), JSON.stringify({ width, height }));
+  } catch {
+    // Ignoramos errores de escritura del estado de ventana (no es critico).
+  }
 }
 
 async function readSettings(): Promise<Settings> {
@@ -144,9 +174,10 @@ function errorResult(command: string, error: unknown): KubectlResult {
 }
 
 function createWindow() {
+  const savedSize = readWindowSize();
   const mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
+    width: savedSize?.width ?? 1320,
+    height: savedSize?.height ?? 860,
     minWidth: 860,
     minHeight: 620,
     title: "kubeui",
@@ -172,6 +203,9 @@ function createWindow() {
     const allowed = isDev && devUrl ? url.startsWith(devUrl) : url.startsWith("file://");
     if (!allowed) event.preventDefault();
   });
+
+  // Recordar el tamaño de la ventana al cerrarla.
+  mainWindow.on("close", () => saveWindowSize(mainWindow));
 
   if (isDev) {
     mainWindow.webContents.on("console-message", (details) => {
@@ -410,7 +444,7 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
   const { streamId } = request;
   let args: string[];
   try {
-    args = request.command !== undefined ? parseCommandLine(request.command) : request.args ?? [];
+    args = request.command !== undefined ? parseCommandLine(request.command) : (request.args ?? []);
     assertValidArgs(args);
     if (!args.length) throw new Error("Ingresa un comando kubectl.");
   } catch (error) {

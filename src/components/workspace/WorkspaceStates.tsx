@@ -9,8 +9,8 @@ export function MissingBridge() {
         <Boxes size={34} />
         <h1>kubeui no pudo cargar la API de escritorio</h1>
         <p>
-          Abre la app con <code>start-macos.command</code>, <code>start-windows.bat</code> o <code>npm run dev</code>.
-          Si estás viendo esto dentro de Electron, cierra la ventana y vuelve a iniciar.
+          Abre la app con <code>start-macos.command</code>, <code>start-windows.bat</code> o <code>npm run dev</code>. Si estás viendo esto
+          dentro de Electron, cierra la ventana y vuelve a iniciar.
         </p>
       </div>
     </div>

@@ -86,7 +86,11 @@ export const resourceConfigs: ResourceConfig[] = [
       { key: "schedule", label: "Schedule", getter: (item) => stringAt(item.spec?.schedule) },
       { key: "suspend", label: "Suspendido", getter: (item) => ((item.spec as { suspend?: boolean })?.suspend ? "Sí" : "No") },
       { key: "active", label: "Activos", getter: (item) => String(((item.status as { active?: unknown[] })?.active ?? []).length) },
-      { key: "lastSchedule", label: "Última ejec.", getter: (item) => age((item.status as { lastScheduleTime?: string })?.lastScheduleTime) },
+      {
+        key: "lastSchedule",
+        label: "Última ejec.",
+        getter: (item) => age((item.status as { lastScheduleTime?: string })?.lastScheduleTime)
+      },
       { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
     ]
   },
@@ -97,7 +101,11 @@ export const resourceConfigs: ResourceConfig[] = [
     namespaced: true,
     columns: [
       { key: "name", label: "Nombre", getter: nameOf },
-      { key: "completions", label: "Completions", getter: (item) => `${numberAt(item.status?.succeeded)}/${stringAt(item.spec?.completions)}` },
+      {
+        key: "completions",
+        label: "Completions",
+        getter: (item) => `${numberAt(item.status?.succeeded)}/${stringAt(item.spec?.completions)}`
+      },
       { key: "active", label: "Activos", getter: (item) => stringAt(item.status?.active) },
       { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
     ]
@@ -159,7 +167,11 @@ export const resourceConfigs: ResourceConfig[] = [
       { key: "name", label: "Nombre", getter: nameOf },
       { key: "status", label: "Estado", getter: (item) => stringAt(item.status?.phase) },
       { key: "volume", label: "Volumen", getter: (item) => stringAt(item.spec?.volumeName) },
-      { key: "capacity", label: "Capacidad", getter: (item) => stringAt((item.status as { capacity?: { storage?: string } })?.capacity?.storage) },
+      {
+        key: "capacity",
+        label: "Capacidad",
+        getter: (item) => stringAt((item.status as { capacity?: { storage?: string } })?.capacity?.storage)
+      },
       { key: "storageClass", label: "StorageClass", getter: (item) => stringAt(item.spec?.storageClassName) },
       { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
     ]
@@ -205,7 +217,11 @@ export const resourceConfigs: ResourceConfig[] = [
       { key: "name", label: "Nombre", getter: nameOf },
       { key: "status", label: "Estado", getter: (item) => nodeReady(item) },
       { key: "role", label: "Rol", getter: (item) => nodeRoles(item) },
-      { key: "version", label: "Versión", getter: (item) => stringAt((item.status as { nodeInfo?: { kubeletVersion?: string } })?.nodeInfo?.kubeletVersion) },
+      {
+        key: "version",
+        label: "Versión",
+        getter: (item) => stringAt((item.status as { nodeInfo?: { kubeletVersion?: string } })?.nodeInfo?.kubeletVersion)
+      },
       { key: "age", label: "Edad", getter: (item) => age(item.metadata?.creationTimestamp) }
     ]
   }
@@ -214,7 +230,10 @@ export const resourceConfigs: ResourceConfig[] = [
 export const configByKey = Object.fromEntries(resourceConfigs.map((config) => [config.key, config])) as Record<ResourceKey, ResourceConfig>;
 
 export const RESOURCE_CATEGORIES: Array<{ label: string; keys: ResourceKey[] }> = [
-  { label: "Workloads", keys: ["pods", "deployments", "statefulsets", "daemonsets", "replicasets", "cronjobs", "jobs", "horizontalpodautoscalers"] },
+  {
+    label: "Workloads",
+    keys: ["pods", "deployments", "statefulsets", "daemonsets", "replicasets", "cronjobs", "jobs", "horizontalpodautoscalers"]
+  },
   { label: "Red", keys: ["services", "ingress"] },
   { label: "Configuración", keys: ["configmaps", "secrets"] },
   { label: "Almacenamiento", keys: ["persistentvolumeclaims"] },

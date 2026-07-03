@@ -64,11 +64,7 @@ export function podContainerNames(item?: KubeItem): string[] {
         ephemeralContainers?: Array<{ name?: string }>;
       }
     | undefined;
-  const names = [
-    ...(spec?.containers ?? []),
-    ...(spec?.initContainers ?? []),
-    ...(spec?.ephemeralContainers ?? [])
-  ]
+  const names = [...(spec?.containers ?? []), ...(spec?.initContainers ?? []), ...(spec?.ephemeralContainers ?? [])]
     .map((container) => container.name)
     .filter((name): name is string => Boolean(name));
   return Array.from(new Set(names));

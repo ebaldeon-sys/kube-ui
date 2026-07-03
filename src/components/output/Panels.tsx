@@ -123,7 +123,9 @@ export function TerminalPanel({
           </>
         )}
       </div>
-      <pre ref={outputRef} className="terminal-output">{output || " "}</pre>
+      <pre ref={outputRef} className="terminal-output">
+        {output || " "}
+      </pre>
     </div>
   );
 }
