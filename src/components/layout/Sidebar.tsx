@@ -1,4 +1,5 @@
 import { FileCode2, SquareTerminal } from "lucide-react";
+import { memo } from "react";
 import type { ResourceKey, ViewMode } from "../../app/types";
 import { RESOURCE_CATEGORIES, configByKey } from "../../config/resources";
 
@@ -12,7 +13,7 @@ type Props = {
   onApplyYaml: () => void;
 };
 
-export function Sidebar({ activeResource, viewMode, onSelectResource, onTerminal, onApplyYaml }: Props) {
+export const Sidebar = memo(function Sidebar({ activeResource, viewMode, onSelectResource, onTerminal, onApplyYaml }: Props) {
   const resourceActive = RESOURCE_VIEW_MODES.includes(viewMode);
   return (
     <aside className="sidebar">
@@ -47,4 +48,4 @@ export function Sidebar({ activeResource, viewMode, onSelectResource, onTerminal
       </div>
     </aside>
   );
-}
+});

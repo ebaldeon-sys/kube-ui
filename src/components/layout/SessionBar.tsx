@@ -1,4 +1,5 @@
 import { ChevronDown, Copy, RefreshCw } from "lucide-react";
+import { memo } from "react";
 
 type Props = {
   context: string;
@@ -15,7 +16,7 @@ type Props = {
   onCopyCommand: () => void;
 };
 
-export function SessionBar({
+export const SessionBar = memo(function SessionBar({
   context,
   contexts,
   namespaceDraft,
@@ -101,4 +102,4 @@ export function SessionBar({
       </button>
     </div>
   );
-}
+});

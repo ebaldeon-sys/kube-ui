@@ -1,4 +1,5 @@
 import { Boxes, CheckCircle2, Settings, XCircle } from "lucide-react";
+import { memo } from "react";
 
 type Props = {
   kubeconfigCount: number;
@@ -7,7 +8,7 @@ type Props = {
   onOpenSettings: () => void;
 };
 
-export function StatusBar({ kubeconfigCount, statusOk, onShowStatus, onOpenSettings }: Props) {
+export const StatusBar = memo(function StatusBar({ kubeconfigCount, statusOk, onShowStatus, onOpenSettings }: Props) {
   return (
     <footer className="statusbar">
       <div className="brand">
@@ -26,4 +27,4 @@ export function StatusBar({ kubeconfigCount, statusOk, onShowStatus, onOpenSetti
       </button>
     </footer>
   );
-}
+});

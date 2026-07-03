@@ -1,4 +1,5 @@
 import { Layers3, PanelLeftClose, PanelLeftOpen, Plus, X } from "lucide-react";
+import { memo } from "react";
 import { MAX_TABS } from "../../app/constants";
 import type { StreamOwner, TabRunState, TabSession } from "../../app/types";
 
@@ -22,7 +23,7 @@ type Props = {
   onAddTab: () => void;
 };
 
-export function TabStrip({
+export const TabStrip = memo(function TabStrip({
   tabs,
   activeTabId,
   streamOwner,
@@ -39,11 +40,25 @@ export function TabStrip({
         {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
       </button>
       <div className="tabstrip-tabs">
-        <div className="tabstrip-tab-list">
+        <div className="tabstrip-tab-list" role="tablist" aria-label="Pestañas">
           {tabs.map((tab) => {
             const pinned = streamOwner?.tabId === tab.id && streamOwner.pinned;
             return (
-              <div key={tab.id} className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`} onClick={() => onSelectTab(tab.id)}>
+              <div
+                key={tab.id}
+                className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
+                role="tab"
+                tabIndex={0}
+                aria-selected={tab.id === activeTabId}
+                aria-label={`Pestaña ${tab.title}`}
+                onClick={() => onSelectTab(tab.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectTab(tab.id);
+                  }
+                }}
+              >
                 <Layers3 size={15} />
                 {tab.runState !== "idle" && (
                   <span
@@ -79,4 +94,4 @@ export function TabStrip({
       </div>
     </div>
   );
-}
+});
