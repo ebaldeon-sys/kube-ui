@@ -39,6 +39,7 @@ function applyContentSecurityPolicy() {
 const STREAM_CHANNEL = "kubectl:stream:event";
 const activeStreams = new Map<string, ReturnType<typeof spawn>>();
 const stoppedStreams = new Set<string>();
+const MAX_STOPPED_STREAMS = 1000;
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -442,6 +443,13 @@ ipcMain.handle("kubectl:streamStop", (_event, streamId: string) => {
     child.kill();
     activeStreams.delete(streamId);
   } else {
+    // Cota superior de seguridad: si por alguna razon se acumulan marcas de
+    // stop sin consumir, descartamos la mas antigua (orden de insercion) para
+    // que el Set no crezca sin limite.
+    if (stoppedStreams.size >= MAX_STOPPED_STREAMS) {
+      const oldest = stoppedStreams.values().next().value;
+      if (oldest !== undefined) stoppedStreams.delete(oldest);
+    }
     stoppedStreams.add(streamId);
     setTimeout(() => stoppedStreams.delete(streamId), 30_000);
   }

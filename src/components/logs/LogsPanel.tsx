@@ -352,6 +352,11 @@ export function LogsPanel({
     setScrollTop(el.scrollTop);
   }, [currentLine]);
 
+  // Ref al ultimo onQueryChange para evitar stale closure sin re-suscribir el
+  // listener de teclado en cada render.
+  const onQueryChangeRef = useRef(onQueryChange);
+  onQueryChangeRef.current = onQueryChange;
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
@@ -361,7 +366,7 @@ export function LogsPanel({
         window.setTimeout(() => searchInputRef.current?.focus(), 0);
       } else if (event.key === "Escape" && searchOpen) {
         setSearchOpen(false);
-        onQueryChange?.("");
+        onQueryChangeRef.current?.("");
       }
     };
     window.addEventListener("keydown", onKey);

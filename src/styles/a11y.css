@@ -1,0 +1,41 @@
+/* Accesibilidad de teclado y movimiento. Se importa al final para que sus
+   reglas :focus-visible tengan precedencia sobre los outline:none previos. */
+
+:root {
+  --kube-focus-color: #2f6df6;
+  --kube-focus-ring: 2px solid var(--kube-focus-color);
+}
+
+/* Anillo de foco visible SOLO para navegacion por teclado (no en click de raton). */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: var(--kube-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Restaurar el anillo por teclado en los inputs que hacen outline:none al enfocar. */
+.select-wrap select:focus-visible,
+.select-wrap input:focus-visible,
+.terminal-input input:focus-visible,
+.modal-input:focus-visible,
+.logs-search input:focus-visible,
+.table-filter input:focus-visible {
+  outline: var(--kube-focus-ring);
+  outline-offset: 1px;
+}
+
+/* Respetar la preferencia de movimiento reducido: desactiva pulse/spin/enter. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
