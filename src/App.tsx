@@ -50,10 +50,16 @@ function runStateText(state: TabRunState): string {
 }
 
 export function App() {
+  // El puente de preload puede no estar disponible (p. ej. abriendo el HTML
+  // fuera de Electron). Esta comprobacion vive en un componente guardian para
+  // que AppInner llame siempre a sus hooks de forma incondicional (Rules of Hooks).
   if (!window.kubeui) {
     return <MissingBridge />;
   }
+  return <AppInner />;
+}
 
+function AppInner() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [kubeconfigInfos, setKubeconfigInfos] = useState<KubeconfigInspection[]>([]);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -540,7 +546,7 @@ export function App() {
     if (!activeTab || activeTab.resource !== "cronjobs" || !selectedName) return;
     const tab = activeTab;
     const row = activeTab.rows.find((item) => nameOf(item) === selectedName);
-    const next = !Boolean((row?.spec as { suspend?: boolean })?.suspend);
+    const next = !(row?.spec as { suspend?: boolean })?.suspend;
     const result = await showOutput(
       "details",
       ["patch", "cronjob", selectedName, "-p", JSON.stringify({ spec: { suspend: next } })],

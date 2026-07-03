@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from "electron";
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -46,6 +46,25 @@ type KubeconfigInspection = {
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
+// Content Security Policy aplicada por cabecera de respuesta (mas fiable que un
+// meta tag para cargas file://). En produccion es estricta; en dev se relaja lo
+// justo para el HMR de Vite y el preamble inline de react-refresh.
+const CSP_PRODUCTION =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
+const CSP_DEVELOPMENT =
+  "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:5173; object-src 'none'";
+
+function applyContentSecurityPolicy() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [isDev ? CSP_DEVELOPMENT : CSP_PRODUCTION]
+      }
+    });
+  });
+}
+
 const STREAM_CHANNEL = "kubectl:stream:event";
 const activeStreams = new Map<string, ReturnType<typeof spawn>>();
 const stoppedStreams = new Set<string>();
@@ -71,6 +90,21 @@ async function readSettings(): Promise<Settings> {
 async function writeSettings(settings: Settings) {
   await mkdir(app.getPath("userData"), { recursive: true });
   await writeFile(settingsPath(), JSON.stringify(settings, null, 2));
+}
+
+const MAX_ARGS = 256;
+const MAX_ARG_LENGTH = 8192;
+
+// Validacion defensiva de los argumentos que llegan por IPC. Aunque usamos
+// spawn con shell:false (sin riesgo de inyeccion de shell), verificamos la
+// forma de los datos para fallar rapido y evitar comportamientos inesperados.
+function assertValidArgs(args: unknown): asserts args is string[] {
+  if (!Array.isArray(args)) throw new Error("Los argumentos de kubectl deben ser un arreglo.");
+  if (args.length > MAX_ARGS) throw new Error(`Demasiados argumentos (maximo ${MAX_ARGS}).`);
+  for (const arg of args) {
+    if (typeof arg !== "string") throw new Error("Cada argumento de kubectl debe ser una cadena.");
+    if (arg.length > MAX_ARG_LENGTH) throw new Error("Un argumento de kubectl excede la longitud maxima permitida.");
+  }
 }
 
 function buildKubectlArgs(request: KubectlRunRequest) {
@@ -99,6 +133,7 @@ function quoteForDisplay(value: string) {
 }
 
 function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
+  assertValidArgs(request.args);
   const args = buildKubectlArgs(request);
   const env = { ...process.env };
   if (request.kubeconfigPaths?.length) {
@@ -156,6 +191,9 @@ function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
       });
     });
 
+    // stdin puede cerrarse (EPIPE) si el proceso muere antes de leer la entrada.
+    // Capturamos el error para no tumbar el proceso principal de Electron.
+    child.stdin.on("error", () => undefined);
     if (request.input) {
       child.stdin.write(request.input);
     }
@@ -248,6 +286,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  applyContentSecurityPolicy();
   createWindow();
 
   app.on("activate", () => {
@@ -453,6 +492,7 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
   let args: string[];
   try {
     args = request.command !== undefined ? parseCommandLine(request.command) : request.args ?? [];
+    assertValidArgs(args);
     if (!args.length) throw new Error("Ingresa un comando kubectl.");
   } catch (error) {
     stoppedStreams.delete(streamId);
