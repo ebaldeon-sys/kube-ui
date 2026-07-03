@@ -1,10 +1,10 @@
 import { useCallback, useState } from "react";
-import type { DetailDialog } from "../app/types";
+import type { ConfirmDialogState, DetailDialog, InputDialogState } from "../app/types";
 
 export function useDialogs() {
   const [detailDialog, setDetailDialog] = useState<DetailDialog | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ message: string; resolve: (value: boolean) => void } | null>(null);
-  const [inputDialog, setInputDialog] = useState<{ message: string; value: string; resolve: (value: string | null) => void } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [inputDialog, setInputDialog] = useState<InputDialogState | null>(null);
 
   const requestConfirm = useCallback(
     (message: string) => new Promise<boolean>((resolve) => setConfirmDialog({ message, resolve })),

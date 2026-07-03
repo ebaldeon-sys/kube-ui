@@ -1,36 +1,19 @@
-import {
-  AlertTriangle,
-  Boxes,
-  CheckCircle2,
-  ChevronDown,
-  Copy,
-  FileCode2,
-  Layers3,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
-  RefreshCw,
-  Settings,
-  SquareTerminal,
-  X,
-  XCircle
-} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_TABS } from "./app/constants";
 import { createTab } from "./app/createTab";
-import type {
-  KubeItem,
-  ResourceKey,
-  ResourceSnapshot,
-  TabRunState,
-  TabSession,
-  ViewMode
-} from "./app/types";
+import type { KubeItem, ResourceKey, ResourceSnapshot, TabSession, ViewMode } from "./app/types";
+import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
+import { DetailDialog } from "./components/dialogs/DetailDialog";
+import { InputDialog } from "./components/dialogs/InputDialog";
+import { SessionBar } from "./components/layout/SessionBar";
+import { Sidebar } from "./components/layout/Sidebar";
+import { StatusBar } from "./components/layout/StatusBar";
+import { TabStrip } from "./components/layout/TabStrip";
 import { LogsPanel } from "./components/logs/LogsPanel";
 import { ApplyPanel, OutputPanel, TerminalPanel } from "./components/output/Panels";
 import { ResourceTable } from "./components/resources/ResourceTable";
 import { EmptyWorkspace, MissingBridge, SettingsView } from "./components/workspace/WorkspaceStates";
-import { RESOURCE_CATEGORIES, configByKey, resourceConfigs } from "./config/resources";
+import { configByKey, resourceConfigs } from "./config/resources";
 import { useClipboard } from "./hooks/useClipboard";
 import { useDialogs } from "./hooks/useDialogs";
 import { useLogs } from "./hooks/useLogs";
@@ -40,14 +23,6 @@ import { useTabs } from "./hooks/useTabs";
 import { formatKubectlCommand, isUnsupportedInteractiveCommand, kubectlErrorText, kubectlOutput, kubectlSuccessText, unknownMessage } from "./kubectl/format";
 import { nameOf } from "./resources/helpers";
 import type { KubeconfigInspection, KubectlResult, Settings as AppSettings } from "./types";
-
-function runStateText(state: TabRunState): string {
-  if (state === "running") return "Ejecutando";
-  if (state === "done") return "Terminado";
-  if (state === "stopped") return "Detenido";
-  if (state === "error") return "Error";
-  return "Sin actividad";
-}
 
 export function App() {
   // El puente de preload puede no estar disponible (p. ej. abriendo el HTML
@@ -676,231 +651,136 @@ function AppInner() {
   const statusOk = kubectlStatus?.ok;
   const sessionLocked = viewMode !== "table";
 
+  // Cambia el kind de recurso: guarda el snapshot del kind actual y restaura el
+  // cacheado del nuevo. La vista "apply" es transitoria y no se persiste.
+  const selectResource = (key: ResourceKey) => {
+    if (!activeTab) return;
+    const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de recurso" });
+    if (activeTab.resource === key) {
+      setViewMode("table");
+      return;
+    }
+    const snapshot: ResourceSnapshot = {
+      rows: activeTab.rows,
+      selectedName: activeTab.selectedName,
+      selectedNames: activeTab.selectedNames,
+      viewMode: activeTab.viewMode === "apply" ? "table" : activeTab.viewMode,
+      outputTitle: activeTab.outputTitle,
+      output: activeTab.output,
+      lastCommand: activeTab.lastCommand
+    };
+    const cached = activeTab.resourceCache[key];
+    const restoredViewMode = cached?.viewMode && cached.viewMode !== "apply" ? cached.viewMode : "table";
+    setTabs((current) =>
+      current.map((tab) => {
+        if (tab.id !== activeTab.id) return tab;
+        return {
+          ...tab,
+          resource: key,
+          resourceCache: { ...tab.resourceCache, [activeTab.resource]: snapshot },
+          rows: cached?.rows ?? [],
+          selectedName: cached?.selectedName ?? "",
+          selectedNames: cached?.selectedNames ?? [],
+          viewMode: restoredViewMode,
+          outputTitle: cached?.outputTitle ?? "",
+          output: cached?.output ?? "",
+          lastCommand: cached?.lastCommand ?? "",
+          yamlDraft: "",
+          yamlEditMode: false,
+          loading: false,
+          runState: stopped ? "stopped" : "idle",
+          runLabel: stopped ? "Detenido por cambio de recurso" : ""
+        };
+      })
+    );
+  };
+
+  const changeContext = (nextContext: string) => {
+    if (!activeTab) return;
+    const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de contexto" });
+    updateActiveTab({
+      context: nextContext,
+      namespace: contextNamespaces[nextContext] ?? "default",
+      rows: [],
+      selectedName: "",
+      selectedNames: [],
+      title: nextContext || "Sin contexto",
+      runState: stopped ? "stopped" : "idle",
+      runLabel: stopped ? "Detenido por cambio de contexto" : ""
+    });
+    refreshNamespaces(nextContext);
+  };
+
+  const handleNamespaceInput = (value: string) => {
+    if (!activeTab) return;
+    setNamespaceDraft(value);
+    // Auto-confirmar si el valor coincide con una sugerencia (seleccion del datalist).
+    if (namespaces.includes(value) && value !== activeTab.namespace) {
+      const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
+      updateActiveTab({ namespace: value, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
+    }
+  };
+
+  const showStatusDetail = () => {
+    setDetailDialog({
+      title: statusOk ? "kubectl listo" : "kubectl no disponible",
+      message: statusOk ? "La app puede ejecutar kubectl desde el PATH actual." : "No se pudo ejecutar kubectl correctamente.",
+      details: kubectlStatus ? kubectlOutput(kubectlStatus, "Sin detalle disponible.") : "Aun no se ejecuto la verificacion.",
+      command: kubectlStatus?.command
+    });
+  };
+
+  const openSettings = () => {
+    // Recordar la vista actual para poder regresar al mismo kind/accion.
+    if (viewMode !== "settings") setSettingsReturn(viewMode);
+    setViewMode("settings");
+  };
+
   return (
     <div className={`app-shell ${logsExpanded ? "logs-expanded" : ""}`}>
-      <div className="tabstrip">
-        <button
-          className="sidebar-toggle"
-          title={sidebarOpen ? "Ocultar panel" : "Mostrar panel"}
-          onClick={() => setSidebarOpen((value) => !value)}
-        >
-          {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-        </button>
-        <div className="tabstrip-tabs">
-          <div className="tabstrip-tab-list">
-            {tabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`chrome-tab ${tab.id === activeTabId ? "active" : ""}`}
-                onClick={() => {
-                  setActiveTabId(tab.id);
-                }}
-              >
-                <Layers3 size={15} />
-                {tab.runState !== "idle" && (
-                  <span
-                    className={`tab-run-dot ${tab.runState}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " pinned" : ""}`}
-                    title={`${runStateText(tab.runState)}${tab.runLabel ? `: ${tab.runLabel}` : ""}${streamOwner?.tabId === tab.id && streamOwner.pinned ? " · fijado" : ""}`}
-                  />
-                )}
-                <span>{tab.title}</span>
-                {tabs.length > 1 && (
-                  <X
-                    size={14}
-                    className="chrome-tab-close"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          {tabs.length < MAX_TABS && (
-            <button
-              className="tabstrip-add"
-              title={!contexts.length ? "Agrega un kubeconfig con contextos" : "Nueva pestaña"}
-              onClick={addTab}
-              disabled={!contexts.length}
-            >
-              <Plus size={16} />
-            </button>
-          )}
-        </div>
-      </div>
+      <TabStrip
+        tabs={tabs}
+        activeTabId={activeTabId}
+        streamOwner={streamOwner}
+        sidebarOpen={sidebarOpen}
+        hasContexts={contexts.length > 0}
+        onToggleSidebar={() => setSidebarOpen((value) => !value)}
+        onSelectTab={setActiveTabId}
+        onCloseTab={closeTab}
+        onAddTab={addTab}
+      />
 
       <main className={`workspace ${sidebarOpen && !logsExpanded ? "" : "collapsed"}`}>
         {sidebarOpen && !logsExpanded && (
-          <aside className="sidebar">
-            <div className="resource-list">
-              {RESOURCE_CATEGORIES.map((category) => (
-                <div key={category.label} className="resource-group">
-                  <span className="resource-group-title">{category.label}</span>
-                  {category.keys.map((key) => {
-                    const config = configByKey[key];
-                    return (
-                      <button
-                        key={config.key}
-                        className={activeTab?.resource === config.key && (viewMode === "table" || viewMode === "details" || viewMode === "yaml" || viewMode === "apply") ? "active" : ""}
-                        onClick={() => {
-                          if (!activeTab) return;
-                          const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de recurso" });
-                          if (activeTab.resource === config.key) {
-                            // Mismo kind: si estamos en una accion, volver a la tabla.
-                            setViewMode("table");
-                            return;
-                          }
-                          // Guardar snapshot del kind actual y restaurar el del nuevo.
-                          // La vista de edicion ("apply") es transitoria: su
-                          // contenido (yamlDraft) no se cachea por kind, asi que
-                          // no la persistimos (se guardaria como "table") para
-                          // evitar que reaparezca pegada al volver a este kind.
-                          const snapshot: ResourceSnapshot = {
-                            rows: activeTab.rows,
-                            selectedName: activeTab.selectedName,
-                            selectedNames: activeTab.selectedNames,
-                            viewMode: activeTab.viewMode === "apply" ? "table" : activeTab.viewMode,
-                            outputTitle: activeTab.outputTitle,
-                            output: activeTab.output,
-                            lastCommand: activeTab.lastCommand
-                          };
-                          const cached = activeTab.resourceCache[config.key];
-                          const restoredViewMode = cached?.viewMode && cached.viewMode !== "apply" ? cached.viewMode : "table";
-                          setTabs((current) => current.map((tab) => {
-                            if (tab.id !== activeTab.id) return tab;
-                            return {
-                              ...tab,
-                              resource: config.key,
-                              resourceCache: { ...tab.resourceCache, [activeTab.resource]: snapshot },
-                              rows: cached?.rows ?? [],
-                              selectedName: cached?.selectedName ?? "",
-                              selectedNames: cached?.selectedNames ?? [],
-                              viewMode: restoredViewMode,
-                              outputTitle: cached?.outputTitle ?? "",
-                              output: cached?.output ?? "",
-                              lastCommand: cached?.lastCommand ?? "",
-                              // Limpiar el borrador de edicion para que no se
-                              // arrastre entre kinds.
-                              yamlDraft: "",
-                              yamlEditMode: false,
-                              loading: false,
-                              runState: stopped ? "stopped" : "idle",
-                              runLabel: stopped ? "Detenido por cambio de recurso" : ""
-                            };
-                          }));
-                        }}
-                      >
-                        {config.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-            <div className="side-actions">
-              <button className={viewMode === "terminal" ? "active" : ""} onClick={() => setViewMode("terminal")}>
-                <SquareTerminal size={16} />
-                Terminal
-              </button>
-              <button className={viewMode === "apply" ? "active" : ""} onClick={() => { updateActiveTab({ yamlEditMode: false }); setViewMode("apply"); }}>
-                <FileCode2 size={16} />
-                Aplicar YAML
-              </button>
-            </div>
-          </aside>
+          <Sidebar
+            activeResource={activeTab?.resource}
+            viewMode={viewMode}
+            onSelectResource={selectResource}
+            onTerminal={() => setViewMode("terminal")}
+            onApplyYaml={() => {
+              updateActiveTab({ yamlEditMode: false });
+              setViewMode("apply");
+            }}
+          />
         )}
 
         <section className="content">
           {globalMessage && <div className="banner">{globalMessage}</div>}
           {activeTab && viewMode !== "settings" && !logsExpanded && (
-            <div className={`session-bar ${sessionLocked ? "locked" : ""}`}>
-              <label>
-                Contexto
-                <span className="select-wrap">
-                  <select
-                    value={activeTab.context}
-                    disabled={sessionLocked}
-                    title={sessionLocked ? "Disponible solo en la vista de listado" : "Cambiar contexto"}
-                    onChange={(event) => {
-                      if (sessionLocked) return;
-                      const nextContext = event.target.value;
-                      const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de contexto" });
-                      updateActiveTab({
-                        context: nextContext,
-                        namespace: contextNamespaces[nextContext] ?? "default",
-                        rows: [],
-                        selectedName: "",
-                        selectedNames: [],
-                        title: nextContext || "Sin contexto",
-                        runState: stopped ? "stopped" : "idle",
-                        runLabel: stopped ? "Detenido por cambio de contexto" : ""
-                      });
-                      refreshNamespaces(nextContext);
-                    }}
-                  >
-                    {contexts.map((context) => (
-                      <option key={context} value={context}>
-                        {context}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </span>
-              </label>
-              <label>
-                Namespace
-                <span className="select-wrap">
-                  <input
-                    list="namespace-options"
-                    value={namespaceDraft}
-                    placeholder="default"
-                    disabled={sessionLocked}
-                    title={sessionLocked ? "Disponible solo en la vista de listado" : "Cambiar namespace"}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onChange={(event) => {
-                      if (sessionLocked) return;
-                      const value = event.target.value;
-                      setNamespaceDraft(value);
-                      if (namespaces.includes(value) && value !== activeTab.namespace) {
-                        const stopped = stopStream({ tabId: activeTab.id, state: "stopped", label: "Detenido por cambio de namespace" });
-                        updateActiveTab({ namespace: value, rows: [], selectedName: "", selectedNames: [], runState: stopped ? "stopped" : "idle", runLabel: stopped ? "Detenido por cambio de namespace" : "" });
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (sessionLocked) return;
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        commitNamespace();
-                      }
-                    }}
-                    onBlur={() => {
-                      if (!sessionLocked) commitNamespace();
-                    }}
-                  />
-                  <ChevronDown size={15} />
-                  <datalist id="namespace-options">
-                    {namespaces.map((namespace) => (
-                      <option key={namespace} value={namespace} />
-                    ))}
-                  </datalist>
-                </span>
-              </label>
-              <button
-                className="toolbar-button"
-                title={sessionLocked ? "Disponible solo en la vista de listado" : "Refrescar listado"}
-                onClick={refreshResources}
-                disabled={activeTab.loading || sessionLocked}
-              >
-                <RefreshCw size={16} />
-                Refrescar
-              </button>
-              <code>{activeTab.lastCommand || "kubectl --context ..."}</code>
-              <button className="icon-button" title="Copiar comando" onClick={() => copyToClipboard(activeTab.lastCommand, "Comando")} disabled={!activeTab.lastCommand}>
-                <Copy size={16} />
-              </button>
-            </div>
+            <SessionBar
+              context={activeTab.context}
+              contexts={contexts}
+              namespaceDraft={namespaceDraft}
+              namespaces={namespaces}
+              sessionLocked={sessionLocked}
+              loading={activeTab.loading}
+              lastCommand={activeTab.lastCommand}
+              onContextChange={changeContext}
+              onNamespaceInput={handleNamespaceInput}
+              onNamespaceCommit={commitNamespace}
+              onRefresh={refreshResources}
+              onCopyCommand={() => copyToClipboard(activeTab.lastCommand, "Comando")}
+            />
           )}
 
           {viewMode === "settings" && settings && (
@@ -1035,157 +915,38 @@ function AppInner() {
       </main>
 
       {!logsExpanded && (
-        <footer className="statusbar">
-          <div className="brand">
-            <Boxes size={20} />
-            <div>
-              <strong>kubeui</strong>
-              <span>{kubeconfigPaths.length ? `${kubeconfigPaths.length} kubeconfig` : "sin kubeconfig"}</span>
-            </div>
-          </div>
-          <button
-            className={`status-pill ${statusOk ? "ok" : "bad"}`}
-            title="Ver detalle de kubectl"
-            onClick={() => setDetailDialog({
-              title: statusOk ? "kubectl listo" : "kubectl no disponible",
-              message: statusOk ? "La app puede ejecutar kubectl desde el PATH actual." : "No se pudo ejecutar kubectl correctamente.",
-              details: kubectlStatus ? kubectlOutput(kubectlStatus, "Sin detalle disponible.") : "Aun no se ejecuto la verificacion.",
-              command: kubectlStatus?.command
-            })}
-          >
-            {statusOk ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-            <span>{statusOk ? "kubectl listo" : "kubectl no disponible"}</span>
-          </button>
-          <button
-            className="icon-button"
-            title="Configurar kubeconfig"
-            onClick={() => {
-              // Recordar la vista actual para poder regresar al mismo kind/accion.
-              if (viewMode !== "settings") setSettingsReturn(viewMode);
-              setViewMode("settings");
-            }}
-          >
-            <Settings size={18} />
-          </button>
-        </footer>
+        <StatusBar
+          kubeconfigCount={kubeconfigPaths.length}
+          statusOk={statusOk}
+          onShowStatus={showStatusDetail}
+          onOpenSettings={openSettings}
+        />
       )}
 
       {confirmDialog && (
-        <div
-          className="modal-backdrop"
-          onClick={() => {
-            confirmDialog.resolve(false);
+        <ConfirmDialog
+          dialog={confirmDialog}
+          onClose={(value) => {
+            confirmDialog.resolve(value);
             setConfirmDialog(null);
           }}
-        >
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <p className="modal-message">{confirmDialog.message}</p>
-            <div className="modal-actions">
-              <button
-                className="toolbar-button"
-                onClick={() => {
-                  confirmDialog.resolve(false);
-                  setConfirmDialog(null);
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                className="toolbar-button primary"
-                onClick={() => {
-                  confirmDialog.resolve(true);
-                  setConfirmDialog(null);
-                }}
-              >
-                Aceptar
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
 
       {inputDialog && (
-        <div
-          className="modal-backdrop"
-          onClick={() => {
-            inputDialog.resolve(null);
+        <InputDialog
+          dialog={inputDialog}
+          onChange={(value) => setInputDialog((state) => (state ? { ...state, value } : state))}
+          onClose={(value) => {
+            inputDialog.resolve(value);
             setInputDialog(null);
           }}
-        >
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <p className="modal-message">{inputDialog.message}</p>
-            <input
-              className="modal-input"
-              autoFocus
-              value={inputDialog.value}
-              onChange={(event) => setInputDialog((state) => (state ? { ...state, value: event.target.value } : state))}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  inputDialog.resolve(inputDialog.value);
-                  setInputDialog(null);
-                } else if (event.key === "Escape") {
-                  inputDialog.resolve(null);
-                  setInputDialog(null);
-                }
-              }}
-            />
-            <div className="modal-actions">
-              <button
-                className="toolbar-button"
-                onClick={() => {
-                  inputDialog.resolve(null);
-                  setInputDialog(null);
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                className="toolbar-button primary"
-                onClick={() => {
-                  inputDialog.resolve(inputDialog.value);
-                  setInputDialog(null);
-                }}
-              >
-                Aceptar
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
 
       {toastMessage && <div className="toast-notice">{toastMessage}</div>}
 
-      {detailDialog && (
-        <div className="modal-backdrop" onClick={() => setDetailDialog(null)}>
-          <div className="modal detail-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-heading">
-              <AlertTriangle size={18} />
-              <strong>{detailDialog.title}</strong>
-            </div>
-            {detailDialog.message && <p className="modal-message">{detailDialog.message}</p>}
-            {detailDialog.command && (
-              <div className="command-box">
-                <code>{detailDialog.command}</code>
-                <button className="icon-button" title="Copiar comando" onClick={() => copyToClipboard(detailDialog.command ?? "", "Comando")}>
-                  <Copy size={15} />
-                </button>
-              </div>
-            )}
-            {detailDialog.details && <pre className="modal-pre">{detailDialog.details}</pre>}
-            <div className="modal-actions">
-              {detailDialog.details && (
-                <button className="toolbar-button" onClick={() => copyToClipboard(detailDialog.details ?? "", "Detalle")}>
-                  <Copy size={16} />
-                  Copiar
-                </button>
-              )}
-              <button className="toolbar-button primary" onClick={() => setDetailDialog(null)}>
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {detailDialog && <DetailDialog dialog={detailDialog} onClose={() => setDetailDialog(null)} onCopy={copyToClipboard} />}
     </div>
   );
 }

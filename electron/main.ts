@@ -5,43 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-
-type Settings = {
-  kubeconfigPaths: string[];
-};
-
-type KubectlRunRequest = {
-  args: string[];
-  kubeconfigPaths?: string[];
-  context?: string;
-  namespace?: string;
-  input?: string;
-  timeoutMs?: number;
-};
-
-type KubectlManualRequest = {
-  command: string;
-  kubeconfigPaths?: string[];
-  context?: string;
-  namespace?: string;
-};
-
-type KubectlResult = {
-  ok: boolean;
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  command: string;
-};
-
-type KubeconfigInspection = {
-  path: string;
-  exists: boolean;
-  contexts: string[];
-  ok: boolean;
-  error?: string;
-  command?: string;
-};
+import type {
+  KubeconfigInspection,
+  KubectlManualRequest,
+  KubectlResult,
+  KubectlRunRequest,
+  StoredSettings as Settings
+} from "../shared/types.js";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));

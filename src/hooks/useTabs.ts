@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { TabSession, ViewMode } from "../app/types";
 
 export function useTabs() {
@@ -6,12 +6,18 @@ export function useTabs() {
   const [activeTabId, setActiveTabId] = useState("");
   const [fallbackViewMode, setFallbackViewMode] = useState<ViewMode>("table");
 
+  // Espejo del id activo para evitar stale closures: un callback async que
+  // comenzo antes de un cambio de pestaña debe actuar sobre la pestaña vigente,
+  // no sobre la capturada al crear el closure.
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId), [activeTabId, tabs]);
   const viewMode: ViewMode = activeTab?.viewMode ?? fallbackViewMode;
 
   const updateActiveTab = useCallback((patch: Partial<TabSession>) => {
-    setTabs((current) => current.map((tab) => (tab.id === activeTabId ? { ...tab, ...patch } : tab)));
-  }, [activeTabId]);
+    setTabs((current) => current.map((tab) => (tab.id === activeTabIdRef.current ? { ...tab, ...patch } : tab)));
+  }, []);
 
   const updateTab = useCallback((tabId: string, patch: Partial<TabSession>) => {
     setTabs((current) => current.map((tab) => (tab.id === tabId ? { ...tab, ...patch } : tab)));

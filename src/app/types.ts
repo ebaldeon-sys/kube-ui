@@ -115,3 +115,14 @@ export type DetailDialog = {
   details?: string;
   command?: string;
 };
+
+export type ConfirmDialogState = {
+  message: string;
+  resolve: (value: boolean) => void;
+};
+
+export type InputDialogState = {
+  message: string;
+  value: string;
+  resolve: (value: string | null) => void;
+};

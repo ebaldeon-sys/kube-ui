@@ -1,37 +1,15 @@
+import type { KubeconfigInspection, KubectlResult, KubectlRunRequest, PickedYamlFile } from "../shared/types";
+
+// Tipos de IPC compartidos con el proceso principal (fuente unica en shared/).
+export type { KubectlResult, KubeconfigInspection, PickedYamlFile } from "../shared/types";
+
+// Alias historico usado en el renderer.
+export type KubectlRequest = KubectlRunRequest;
+
+// El renderer recibe los ajustes con el delimitador de PATH ya resuelto por main.
 export type Settings = {
   kubeconfigPaths: string[];
   pathDelimiter: string;
-};
-
-export type KubectlResult = {
-  ok: boolean;
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  command: string;
-};
-
-export type KubectlRequest = {
-  args: string[];
-  kubeconfigPaths?: string[];
-  context?: string;
-  namespace?: string;
-  input?: string;
-  timeoutMs?: number;
-};
-
-export type PickedYamlFile = {
-  path: string;
-  content: string;
-};
-
-export type KubeconfigInspection = {
-  path: string;
-  exists: boolean;
-  contexts: string[];
-  ok: boolean;
-  error?: string;
-  command?: string;
 };
 
 export type kubeuiApi = {
