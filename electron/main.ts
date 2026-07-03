@@ -12,6 +12,7 @@ import type {
   KubectlRunRequest,
   StoredSettings as Settings
 } from "../shared/types.js";
+import { assertValidArgs, buildKubectlArgs, parseCommandLine, quoteForDisplay } from "./kubectl-args.js";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -60,46 +61,6 @@ async function readSettings(): Promise<Settings> {
 async function writeSettings(settings: Settings) {
   await mkdir(app.getPath("userData"), { recursive: true });
   await writeFile(settingsPath(), JSON.stringify(settings, null, 2));
-}
-
-const MAX_ARGS = 256;
-const MAX_ARG_LENGTH = 8192;
-
-// Validacion defensiva de los argumentos que llegan por IPC. Aunque usamos
-// spawn con shell:false (sin riesgo de inyeccion de shell), verificamos la
-// forma de los datos para fallar rapido y evitar comportamientos inesperados.
-function assertValidArgs(args: unknown): asserts args is string[] {
-  if (!Array.isArray(args)) throw new Error("Los argumentos de kubectl deben ser un arreglo.");
-  if (args.length > MAX_ARGS) throw new Error(`Demasiados argumentos (maximo ${MAX_ARGS}).`);
-  for (const arg of args) {
-    if (typeof arg !== "string") throw new Error("Cada argumento de kubectl debe ser una cadena.");
-    if (arg.length > MAX_ARG_LENGTH) throw new Error("Un argumento de kubectl excede la longitud maxima permitida.");
-  }
-}
-
-function buildKubectlArgs(request: KubectlRunRequest) {
-  const args: string[] = [];
-  if (request.context && !hasFlag(request.args, "--context")) {
-    args.push("--context", request.context);
-  }
-  if (request.namespace && !hasNamespaceFlag(request.args)) {
-    args.push("-n", request.namespace);
-  }
-  args.push(...request.args);
-  return args;
-}
-
-function hasFlag(args: string[], flag: string) {
-  return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
-}
-
-function hasNamespaceFlag(args: string[]) {
-  return hasFlag(args, "-n") || hasFlag(args, "--namespace");
-}
-
-function quoteForDisplay(value: string) {
-  if (/^[A-Za-z0-9_./:=@-]+$/.test(value)) return value;
-  return JSON.stringify(value);
 }
 
 function runKubectl(request: KubectlRunRequest): Promise<KubectlResult> {
@@ -179,47 +140,6 @@ function errorResult(command: string, error: unknown): KubectlResult {
     stderr: error instanceof Error ? error.message : String(error),
     command
   };
-}
-
-function parseCommandLine(command: string) {
-  const args: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const char of command.trim()) {
-    if (escaping) {
-      current += char;
-      escaping = false;
-      continue;
-    }
-    if (char === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if ((char === "'" || char === '"') && !quote) {
-      quote = char;
-      continue;
-    }
-    if (char === quote) {
-      quote = null;
-      continue;
-    }
-    if (/\s/.test(char) && !quote) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-
-  if (quote) throw new Error("Hay una comilla sin cerrar en el comando.");
-  if (escaping) current += "\\";
-  if (current) args.push(current);
-  if (args[0] === "kubectl") args.shift();
-  return args;
 }
 
 function createWindow() {
