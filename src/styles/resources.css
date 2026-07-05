@@ -119,6 +119,44 @@ table {
   border-collapse: collapse;
 }
 
+/* Tabla virtualizada: layout fijo para que las columnas no salten al cambiar la
+   ventana de filas renderizadas. Las celdas de texto truncan con puntos suspensivos. */
+.virtual-table {
+  table-layout: fixed;
+}
+
+.virtual-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Las celdas con badge no se recortan: preferimos que el estado se lea completo
+   (aunque roce la columna vecina en anchos extremos) a cortarlo con ellipsis. */
+.virtual-table td.cell-badge {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.virtual-table col.col-selection {
+  width: 38px;
+}
+
+.virtual-table col.col-primary {
+  width: 30%;
+}
+
+/* Filas espaciadoras de la virtualizacion: reservan alto sin contenido ni hover. */
+.virtual-table tr.v-spacer,
+.virtual-table tr.v-spacer:hover {
+  background: transparent;
+  cursor: default;
+}
+
+.virtual-table tr.v-spacer td {
+  padding: 0;
+  border: 0;
+}
+
 th,
 td {
   height: 42px;

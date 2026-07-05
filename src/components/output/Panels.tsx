@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy, FolderPlus, Play, RefreshCw, Square, SquareTerminal } from "lucide-react";
+import { ArrowLeft, Copy, FolderPlus, Play, RefreshCw, Square } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export function OutputPanel({
@@ -94,10 +94,17 @@ export function TerminalPanel({
   return (
     <div className="terminal-panel">
       <div className="terminal-input">
-        <SquareTerminal size={18} />
+        <span className="terminal-prompt" aria-hidden="true">
+          $
+        </span>
         <input
           value={command}
           placeholder="kubectl get pods -o wide"
+          aria-label="Comando de kubectl"
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          autoComplete="off"
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") onRun();

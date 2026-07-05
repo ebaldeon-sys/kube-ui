@@ -264,6 +264,7 @@
 }
 
 .workspace {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(220px, 244px) minmax(0, 1fr);
   min-width: 0;
@@ -272,6 +273,52 @@
 
 .workspace.collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Modo riel: el sidebar se reduce a una columna de iconos (56px) y se expande
+   como overlay al pasar el mouse, sin reacomodar el contenido. El boton de la
+   tabstrip alterna entre este modo y el fijado (ancho completo). */
+.workspace.rail {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+
+/* El sidebar sale del flujo (absolute), asi que el contenido se ancla a la
+   segunda columna para no colocarse bajo el riel. */
+.workspace.rail .content {
+  grid-column: 2;
+}
+
+.workspace.rail .sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 56px;
+  padding: 16px 8px;
+  overflow-x: hidden;
+  transition:
+    width 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.workspace.rail .sidebar:hover {
+  width: 224px;
+  overflow-x: visible;
+  box-shadow: 14px 0 34px rgba(2, 6, 16, 0.42);
+}
+
+/* En reposo (riel sin hover) ocultamos etiquetas y titulos de grupo y centramos
+   los iconos; reaparecen al expandir. */
+.workspace.rail .sidebar:not(:hover) .nav-label,
+.workspace.rail .sidebar:not(:hover) .resource-group-title {
+  display: none;
+}
+
+.workspace.rail .sidebar:not(:hover) .resource-list button,
+.workspace.rail .sidebar:not(:hover) .side-actions button {
+  justify-content: center;
+  padding: 0;
 }
 
 .sidebar {
@@ -283,6 +330,8 @@
   overflow-y: auto;
   background: #111827;
   color: #d8e0ec;
+  scrollbar-width: thin;
+  scrollbar-color: #33455f transparent;
 }
 
 .new-tab,
@@ -299,6 +348,19 @@
   background: transparent;
   border-radius: 6px;
   text-align: left;
+}
+
+/* Los iconos de recurso no se encogen ni se tiñen distinto del texto del boton. */
+.resource-list button svg,
+.side-actions button svg {
+  flex: 0 0 auto;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.resource-list button.active svg,
+.side-actions button.active svg {
+  opacity: 1;
 }
 
 .new-tab {

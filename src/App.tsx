@@ -23,6 +23,7 @@ import { useStream } from "./hooks/useStream";
 import { useTabs } from "./hooks/useTabs";
 import { kubectlErrorText, kubectlOutput, unknownMessage } from "./kubectl/format";
 import { nameOf } from "./resources/helpers";
+import { useTheme } from "./theme/useTheme";
 import type { KubeconfigInspection, KubectlResult, Settings as AppSettings } from "./types";
 
 export function App() {
@@ -49,13 +50,29 @@ function AppInner() {
   const [namespaceDraft, setNamespaceDraft] = useState("");
   const { streamOwner, streamOwnerRef, stopStreamRef, logBufferRef, logFlushTimerRef, setCurrentStreamOwner, stopStream } =
     useStream(setTabs);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Sidebar fijado (ancho completo, empuja el contenido) vs riel de iconos que se
+  // expande al pasar el mouse. Se recuerda la preferencia entre sesiones.
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    try {
+      return localStorage.getItem("kubeui-sidebar-pinned") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("kubeui-sidebar-pinned", sidebarPinned ? "1" : "0");
+    } catch {
+      // Ignorar fallos de persistencia (modo privado, etc.).
+    }
+  }, [sidebarPinned]);
   // Vista ampliada de logs: oculta tabstrip, sidebar, barra de sesion y statusbar.
   const [logsExpanded, setLogsExpanded] = useState(false);
   // Vista a la que regresar al cerrar la configuracion (kubeconfig).
   const [settingsReturn, setSettingsReturn] = useState<ViewMode>("table");
   const { detailDialog, setDetailDialog, confirmDialog, setConfirmDialog, inputDialog, setInputDialog, requestConfirm, requestInput } =
     useDialogs();
+  const { theme, toggleTheme } = useTheme();
 
   const activeStreamOwner = streamOwner?.tabId === activeTabId ? streamOwner : null;
   const streaming = Boolean(activeStreamOwner);
@@ -528,16 +545,16 @@ function AppInner() {
         tabs={tabs}
         activeTabId={activeTabId}
         streamOwner={streamOwner}
-        sidebarOpen={sidebarOpen}
+        sidebarPinned={sidebarPinned}
         hasContexts={contexts.length > 0}
-        onToggleSidebar={() => setSidebarOpen((value) => !value)}
+        onToggleSidebar={() => setSidebarPinned((value) => !value)}
         onSelectTab={setActiveTabId}
         onCloseTab={closeTab}
         onAddTab={addTab}
       />
 
-      <main className={`workspace ${sidebarOpen && !logsExpanded ? "" : "collapsed"}`}>
-        {sidebarOpen && !logsExpanded && (
+      <main className={`workspace ${logsExpanded ? "collapsed" : sidebarPinned ? "" : "rail"}`}>
+        {!logsExpanded && (
           <Sidebar
             activeResource={activeTab?.resource}
             viewMode={viewMode}
@@ -708,6 +725,8 @@ function AppInner() {
         <StatusBar
           kubeconfigCount={kubeconfigPaths.length}
           statusOk={statusOk}
+          theme={theme}
+          onToggleTheme={toggleTheme}
           onShowStatus={showStatusDetail}
           onOpenSettings={openSettings}
         />

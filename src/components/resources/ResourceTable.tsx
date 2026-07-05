@@ -13,7 +13,8 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { TABLE_OVERSCAN, TABLE_ROW_H } from "../../app/constants";
 import type { KubeItem, ResourceConfig, TabSession } from "../../app/types";
 import { age, nameOf } from "../../resources/helpers";
 
@@ -91,6 +92,36 @@ export function ResourceTable({
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someVisiblePodsSelected;
   }, [someVisiblePodsSelected]);
+
+  // Virtualizacion vertical: solo montamos las filas visibles del scroll, con
+  // filas espaciadoras arriba/abajo que reservan el alto del resto. table-layout
+  // fijo (ver colgroup) mantiene las columnas estables aunque cambie la ventana.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+  const total = filteredRows.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / TABLE_ROW_H) - TABLE_OVERSCAN);
+  const endIndex = Math.min(total, Math.ceil((scrollTop + viewportH) / TABLE_ROW_H) + TABLE_OVERSCAN);
+  const topPad = startIndex * TABLE_ROW_H;
+  const bottomPad = Math.max(0, (total - endIndex) * TABLE_ROW_H);
+  const windowRows = filteredRows.slice(startIndex, endIndex);
+  const columnCount = config.columns.length + (isPodTable ? 1 : 0);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setViewportH(el.clientHeight));
+    observer.observe(el);
+    setViewportH(el.clientHeight);
+    return () => observer.disconnect();
+  }, []);
+
+  // Al cambiar el filtro o el kind, volvemos arriba para no quedar en un scroll
+  // fuera de rango del nuevo conjunto de filas.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [needle, config.key, tab.id]);
 
   return (
     <div className="table-panel">
@@ -172,8 +203,14 @@ export function ResourceTable({
         )}
       </div>
       <div className={`resource-table-body ${selectedRow && !multiPodSelection ? "with-inspector" : ""}`}>
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap" ref={scrollRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+          <table className="virtual-table">
+            <colgroup>
+              {isPodTable && <col className="col-selection" />}
+              {config.columns.map((column, index) => (
+                <col key={column.key} className={index === 0 ? "col-primary" : undefined} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 {isPodTable && (
@@ -194,7 +231,12 @@ export function ResourceTable({
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((item) => {
+              {total > 0 && topPad > 0 && (
+                <tr className="v-spacer" aria-hidden="true">
+                  <td colSpan={columnCount} style={{ height: topPad }} />
+                </tr>
+              )}
+              {windowRows.map((item) => {
                 const name = nameOf(item);
                 const checked = selectedPodSet.has(name);
                 return (
@@ -214,15 +256,26 @@ export function ResourceTable({
                         />
                       </td>
                     )}
-                    {config.columns.map((column) => (
-                      <td key={column.key}>{renderTableCell(column.key, column.getter(item))}</td>
-                    ))}
+                    {config.columns.map((column) => {
+                      const value = column.getter(item);
+                      const isBadge = column.key === "status" || column.key === "suspend";
+                      return (
+                        <td key={column.key} className={isBadge ? "cell-badge" : undefined} title={cellTitle(column.key, value)}>
+                          {renderTableCell(column.key, value)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
+              {total > 0 && bottomPad > 0 && (
+                <tr className="v-spacer" aria-hidden="true">
+                  <td colSpan={columnCount} style={{ height: bottomPad }} />
+                </tr>
+              )}
               {!filteredRows.length && (
                 <tr>
-                  <td colSpan={config.columns.length + (isPodTable ? 1 : 0)} className="empty-state">
+                  <td colSpan={columnCount} className="empty-state">
                     {loadError ? (
                       <div className="table-error">
                         <AlertTriangle size={22} />
@@ -327,6 +380,12 @@ function ResourceInspector({
       </div>
     </aside>
   );
+}
+
+// Tooltip para celdas de texto que pueden truncarse (las de estado son badges cortas).
+function cellTitle(columnKey: string, value: string): string | undefined {
+  if (columnKey === "status" || columnKey === "suspend") return undefined;
+  return value || undefined;
 }
 
 function renderTableCell(columnKey: string, value: string) {

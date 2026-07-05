@@ -11,6 +11,9 @@ export const LOG_FLUSH_MS = 60;
 // Virtualizacion: alto fijo de cada fila (px) y filas extra fuera de viewport.
 export const LOG_ROW_H = 24;
 export const LOG_OVERSCAN = 12;
+// Virtualizacion de la tabla de recursos: alto de fila (coincide con th/td) y overscan.
+export const TABLE_ROW_H = 40;
+export const TABLE_OVERSCAN = 10;
 export const ALL_LOG_CONTAINERS = "__all__";
 export const MAX_TABS = 12;
 

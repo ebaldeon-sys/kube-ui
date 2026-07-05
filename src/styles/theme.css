@@ -59,13 +59,29 @@ body {
 
 .tabstrip-tabs {
   gap: 5px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  /* El contenedor no scrollea: asi el boton "+" queda siempre visible al final. */
+  overflow: visible;
 }
 
 .tabstrip-tab-list {
   gap: 5px;
-  flex: 0 0 auto;
+  /* La lista de pestañas es la que scrollea horizontalmente. min-width:0 permite
+     que encoja por debajo de su contenido y active el scroll. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Ocultar el scrollbar horizontal: en overlay (macOS) se dibujaba encima de
+     las pestañas. El desplazamiento sigue con trackpad/rueda; el degradado del
+     borde derecho indica que hay mas pestañas fuera de vista. */
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), rgba(0, 0, 0, 0.15));
+  mask-image: linear-gradient(90deg, #000 calc(100% - 22px), rgba(0, 0, 0, 0.15));
+}
+
+.tabstrip-tab-list::-webkit-scrollbar {
+  height: 0;
+  display: none;
 }
 
 .chrome-tab {
