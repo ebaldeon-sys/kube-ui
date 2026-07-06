@@ -305,24 +305,33 @@ Linux `AppImage`/`deb`.
 ## Versionado y releases
 
 La version unica de la app vive en `package.json` (`version`); electron-builder
-la usa para nombrar los artefactos. Para publicar una version:
+la usa para nombrar los artefactos.
+
+### Release automatico (flujo normal)
+
+Cada merge (o push) a `main` publica un release automaticamente: el workflow
+`.github/workflows/auto-release.yml` sube la version **patch**
+(`0.1.1 -> 0.1.2`), crea el tag `vX.Y.Z` y dispara el workflow de release, que
+compila los `.exe` de Windows y publica el GitHub Release con los binarios.
+No hay que hacer nada mas que mergear el PR.
+
+El commit de bump lleva `[skip ci]`, por lo que no re-dispara los workflows.
+
+### Release manual (bumps minor/major)
+
+Para subir una version minor o major, hazlo a mano desde `main`:
 
 ```bash
-npm run release:patch   # 0.1.0 -> 0.1.1 (fixes)
-npm run release:minor   # 0.1.0 -> 0.2.0 (funcionalidad nueva)
-npm run release:major   # 0.1.0 -> 1.0.0 (cambios incompatibles)
-```
-
-Cada comando ejecuta `npm version`, que actualiza `package.json` y
-`package-lock.json`, crea un commit y un tag git `vX.Y.Z`. Luego:
-
-```bash
+npm run release:minor   # 0.1.1 -> 0.2.0 (funcionalidad nueva)
+npm run release:major   # 0.1.1 -> 1.0.0 (cambios incompatibles)
 git push --follow-tags
 ```
 
-Al llegar el tag a GitHub, el workflow de release compila los `.exe` de Windows
-y crea el GitHub Release con los binarios adjuntos. El workflow verifica que el
-tag coincida con la version de `package.json` antes de publicar.
+`npm version` actualiza `package.json` y `package-lock.json`, crea un commit
+(con `[skip ci]`, para que el auto-release no vuelva a subir la version) y un
+tag `vX.Y.Z`; al llegar el tag a GitHub se compila y publica el release. El
+workflow verifica que el tag coincida con la version de `package.json` antes
+de publicar.
 
 ## Notas y limitaciones
 
