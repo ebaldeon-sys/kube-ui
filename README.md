@@ -18,39 +18,46 @@ No se requiere Python, Go ni Docker para ejecutar la app en modo desarrollo.
 
 ## Instalacion
 
+Todos los scripts de instalacion, arranque y empaquetado viven en `scripts/`,
+separados por plataforma:
+
+```text
+scripts/
+  make-icons.mjs               Regenera los iconos de build/.
+  windows/
+    install.bat                Valida Node/npm y ejecuta npm ci.
+    start.bat                  Arranca la app en modo desarrollo.
+    package.bat                Genera el .exe (portable + instalador NSIS).
+  macos/
+    install.command            Valida Node/npm y ejecuta npm ci.
+    start.command              Arranca la app en modo desarrollo.
+    package-macos.sh           Empaqueta dmg + zip (sin firma, solo uso local).
+    package-windows-docker.sh  Genera el .exe portable desde macOS via Docker.
+```
+
+Los scripts se pueden ejecutar con doble clic o desde una terminal; ellos mismos
+se ubican en la raiz del proyecto.
+
 ### Windows
 
-Desde el explorador de archivos puedes ejecutar:
-
 ```bat
-install-windows.bat
-start-windows.bat
+scripts\windows\install.bat
+scripts\windows\start.bat
 ```
 
-O desde una terminal en la carpeta del proyecto:
-
-```bat
-install-windows.bat
-start-windows.bat
-```
-
-`install-windows.bat` valida que exista Node.js, npm y que la version de Node sea compatible con Electron 42. Luego ejecuta `npm install`.
+`install.bat` valida que exista Node.js, npm y que la version de Node sea compatible con Electron 42. Luego ejecuta `npm ci` (instala exactamente lo que dice `package-lock.json`).
 
 ### macOS
 
-Desde Finder puedes abrir:
-
 ```bash
-./install-macos.command
-./start-macos.command
+./scripts/macos/install.command
+./scripts/macos/start.command
 ```
 
 Si el sistema no permite ejecutarlos, habilita permisos:
 
 ```bash
-chmod +x install-macos.command start-macos.command
-./install-macos.command
-./start-macos.command
+chmod +x scripts/macos/*.command scripts/macos/*.sh
 ```
 
 ### Manual
@@ -91,7 +98,9 @@ npm run preview
 Sirve el build web generado por Vite.
 
 ```bash
-npm run dist
+npm run dist       # paquetes para el SO actual
+npm run dist:win   # portable + instalador NSIS de Windows
+npm run dist:mac   # dmg + zip de macOS (sin firma)
 ```
 
 Genera paquetes con Electron Builder. La salida queda en `release/`.
@@ -257,31 +266,67 @@ Los paquetes **no van firmados** (ni notarizados). Consecuencias:
 - macOS: el `.dmg`/`.zip` sirve para uso local (abrir con clic derecho >
   Abrir). No es distribuible a otros Macs sin un Developer ID de Apple.
 
-### Generar el ejecutable de Windows desde macOS
+### Generar el ejecutable de Windows
 
-`package-windows-docker.sh` compila el `.exe` **portable** (un unico ejecutable,
-ideal para compartir) usando la imagen oficial de electron-builder con Wine via
-Docker, sin instalar Wine en el equipo:
+Hay tres formas, de mas a menos recomendada:
 
-```bash
-./package-windows-docker.sh
-```
+1. **GitHub Actions (recomendada).** El workflow `.github/workflows/release.yml`
+   compila en un runner de Windows real con `npm ci`, por lo que nunca hay
+   problemas de Wine, arquitectura ni dependencias. Se dispara al pushear un tag
+   `v*` (ver "Versionado y releases") y publica `kubeui-portable-<version>-x64.exe`
+   y `kubeui-setup-<version>-x64.exe` como GitHub Release. Tambien puede lanzarse
+   a mano desde la pestana Actions (workflow_dispatch) y descargar los .exe como
+   artifacts.
 
-El resultado es `release/kubeui-<version>-portable.exe`. El instalador NSIS no
-puede construirse bajo la emulacion de Apple Silicon; requiere Windows real o CI.
+2. **En una maquina Windows.** Ejecuta `scripts\windows\package.bat` (doble clic
+   o terminal). Valida Node 22.12+, corre `npm ci` y `npm run dist:win`, y abre
+   la carpeta `release/` al terminar. Genera portable + instalador NSIS.
+
+3. **Desde macOS con Docker.** `scripts/macos/package-windows-docker.sh` compila
+   el `.exe` **portable** usando la imagen oficial de electron-builder con Wine,
+   sin instalar Wine en el equipo:
+
+   ```bash
+   ./scripts/macos/package-windows-docker.sh
+   ```
+
+   El resultado queda en `release/`. El instalador NSIS no puede construirse
+   bajo la emulacion de Apple Silicon; para eso usa las opciones 1 o 2.
 
 ### Generar el paquete de macOS
 
 ```bash
-./package-macos.sh    # dmg + zip sin firma
+./scripts/macos/package-macos.sh    # dmg + zip sin firma
 ```
 
 Targets configurados: macOS `dmg`/`zip`, Windows `portable`/`nsis` (x64),
 Linux `AppImage`/`deb`.
+
+## Versionado y releases
+
+La version unica de la app vive en `package.json` (`version`); electron-builder
+la usa para nombrar los artefactos. Para publicar una version:
+
+```bash
+npm run release:patch   # 0.1.0 -> 0.1.1 (fixes)
+npm run release:minor   # 0.1.0 -> 0.2.0 (funcionalidad nueva)
+npm run release:major   # 0.1.0 -> 1.0.0 (cambios incompatibles)
+```
+
+Cada comando ejecuta `npm version`, que actualiza `package.json` y
+`package-lock.json`, crea un commit y un tag git `vX.Y.Z`. Luego:
+
+```bash
+git push --follow-tags
+```
+
+Al llegar el tag a GitHub, el workflow de release compila los `.exe` de Windows
+y crea el GitHub Release con los binarios adjuntos. El workflow verifica que el
+tag coincida con la version de `package.json` antes de publicar.
 
 ## Notas y limitaciones
 
 - La terminal interna esta pensada para comandos no interactivos.
 - Comandos como `kubectl exec -it`, `attach -it` o `port-forward` requieren soporte de pseudo-terminal y deben ejecutarse desde una terminal externa por ahora.
 - Si Electron no descarga su binario durante `npm install`, revisa proxy, certificados corporativos, acceso a internet y version de Node. El proyecto espera Node.js `22.12.0` o superior.
-- `fix-electron-node22.bat`, si existe en tu entorno, debe tratarse como un script local de diagnostico porque puede contener rutas especificas de una maquina.
+- `scripts/windows/fix-electron-node22.bat` y `scripts/windows/make-ca-bundle.ps1`, si existen en tu entorno, son scripts locales de diagnostico (no versionados) porque contienen rutas especificas de una maquina o certificados corporativos.

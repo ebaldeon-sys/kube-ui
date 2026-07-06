@@ -2,7 +2,8 @@
 # Empaqueta la app de escritorio para macOS (dmg + zip) con electron-builder.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# Raiz del proyecto = dos niveles arriba de este script.
+cd "$(dirname "$0")/../.."
 
 echo "kubeui - empaquetando aplicacion para macOS"
 echo

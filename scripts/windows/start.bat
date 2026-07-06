@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-cd /d "%~dp0"
+rem Arranca la app en modo desarrollo (raiz = dos niveles arriba).
+cd /d "%~dp0..\.."
 
 echo kubeui - starting development app
 echo.
@@ -30,7 +31,7 @@ if errorlevel 1 (
   echo Current Node:
   node --version
   echo.
-  echo Install Node.js 22 LTS or newer, then run install-windows.bat again.
+  echo Install Node.js 22 LTS or newer, then run scripts\windows\install.bat again.
   echo.
   pause
   exit /b 1
@@ -38,7 +39,7 @@ if errorlevel 1 (
 
 if not exist "node_modules" (
   echo Dependencies are missing.
-  echo Run install-windows.bat first.
+  echo Run scripts\windows\install.bat first.
   echo.
   pause
   exit /b 1

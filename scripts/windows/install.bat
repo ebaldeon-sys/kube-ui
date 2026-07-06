@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-cd /d "%~dp0"
+rem Instala las dependencias exactas de package-lock.json (raiz = dos niveles arriba).
+cd /d "%~dp0..\.."
 
 echo kubeui - installing dependencies
 echo.
@@ -43,7 +44,7 @@ echo Node: %NODE_VERSION%
 echo npm: %NPM_VERSION%
 echo.
 
-call npm install
+call npm ci
 if errorlevel 1 (
   echo.
   echo Install failed.
@@ -53,6 +54,6 @@ if errorlevel 1 (
 
 echo.
 echo Install completed.
-echo You can now run start-windows.bat.
+echo You can now run scripts\windows\start.bat.
 echo.
 pause

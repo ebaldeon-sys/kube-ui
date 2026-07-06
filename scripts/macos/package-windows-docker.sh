@@ -8,10 +8,11 @@
 # ejecute un stub y eso falla bajo la emulacion qemu de Apple Silicon. Para
 # generar el instalador NSIS hay que compilar en Windows real o en CI.
 #
-# Uso:  ./package-windows-docker.sh
+# Uso (desde la raiz del proyecto):  ./scripts/macos/package-windows-docker.sh
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# Raiz del proyecto = dos niveles arriba de este script.
+cd "$(dirname "$0")/../.."
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker no esta instalado. Instala Docker Desktop y vuelve a intentarlo."

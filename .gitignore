@@ -25,5 +25,8 @@ npm-debug.log*
 *.swp
 *.swo
 
-fix-electron-node22.bat
-make-ca-bundle.ps1
+# Scripts/artefactos locales de diagnostico (rutas de maquina, CA corporativa)
+scripts/windows/fix-electron-node22.bat
+scripts/windows/make-ca-bundle.ps1
+scripts/windows/corp-ca-bundle.pem
+corp-ca-bundle.pem

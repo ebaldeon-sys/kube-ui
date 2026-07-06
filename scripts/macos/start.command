@@ -1,8 +1,9 @@
 #!/bin/zsh
 set -e
 
+# Raiz del proyecto = dos niveles arriba de este script.
 SCRIPT_DIR="${0:a:h}"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/../.."
 
 echo "kubeui - starting development app"
 
@@ -21,13 +22,13 @@ fi
 if ! node -e 'const v=process.versions.node.split(".").map(Number); const ok=v[0]>22 || (v[0]===22 && (v[1]>12 || (v[1]===12 && v[2]>=0))); process.exit(ok?0:1)'; then
   echo "Node.js 22.12.0 or newer is required for Electron 42."
   echo "Current Node: $(node --version)"
-  echo "Install Node.js 22 LTS or newer, then run install-macos.command again."
+  echo "Install Node.js 22 LTS or newer, then run scripts/macos/install.command again."
   exit 1
 fi
 
 if [ ! -d "node_modules" ]; then
   echo "Dependencies are missing."
-  echo "Run install-macos.command first."
+  echo "Run scripts/macos/install.command first."
   exit 1
 fi
 

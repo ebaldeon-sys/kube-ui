@@ -1,8 +1,9 @@
 #!/bin/zsh
 set -e
 
+# Raiz del proyecto = dos niveles arriba de este script.
 SCRIPT_DIR="${0:a:h}"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/../.."
 
 echo "kubeui - installing dependencies"
 
@@ -29,10 +30,10 @@ echo "Node: $(node --version)"
 echo "npm: $(npm --version)"
 echo
 
-npm install
+npm ci
 
 echo
 echo "Install completed."
-echo "You can now run start-macos.command."
+echo "You can now run scripts/macos/start.command."
 echo
 read "unused?Press Enter to close..."
