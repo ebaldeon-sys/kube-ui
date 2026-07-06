@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from "electron";
+import type { WebContents } from "electron";
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -41,6 +42,15 @@ const STREAM_CHANNEL = "kubectl:stream:event";
 const activeStreams = new Map<string, ReturnType<typeof spawn>>();
 const stoppedStreams = new Set<string>();
 const MAX_STOPPED_STREAMS = 1000;
+
+// Envia un evento de stream al renderer solo si su WebContents sigue vivo. Un
+// stream de kubectl (p. ej. logs -f) puede seguir emitiendo datos o cerrarse
+// despues de que la ventana se destruyo; sin este guard, el callback llamaria
+// a send() sobre un objeto destruido y lanzaria "Object has been destroyed".
+function sendStreamEvent(sender: WebContents, payload: unknown): void {
+  if (sender.isDestroyed()) return;
+  sender.send(STREAM_CHANNEL, payload);
+}
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -449,7 +459,7 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
     if (!args.length) throw new Error("Ingresa un comando kubectl.");
   } catch (error) {
     stoppedStreams.delete(streamId);
-    event.sender.send(STREAM_CHANNEL, {
+    sendStreamEvent(event.sender, {
       streamId,
       type: "end",
       code: null,
@@ -467,7 +477,7 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
   const command = ["kubectl", ...fullArgs].map(quoteForDisplay).join(" ");
 
   if (stoppedStreams.delete(streamId)) {
-    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code: null, command });
+    sendStreamEvent(event.sender, { streamId, type: "end", code: null, command });
     return { streamId, command };
   }
 
@@ -482,18 +492,18 @@ ipcMain.handle("kubectl:stream", (event, request: KubectlStreamRequest) => {
   activeStreams.set(streamId, child);
 
   child.stdout.on("data", (chunk: Buffer) => {
-    event.sender.send(STREAM_CHANNEL, { streamId, type: "data", chunk: chunk.toString() });
+    sendStreamEvent(event.sender, { streamId, type: "data", chunk: chunk.toString() });
   });
   child.stderr.on("data", (chunk: Buffer) => {
-    event.sender.send(STREAM_CHANNEL, { streamId, type: "data", chunk: chunk.toString() });
+    sendStreamEvent(event.sender, { streamId, type: "data", chunk: chunk.toString() });
   });
   child.on("error", (error) => {
     activeStreams.delete(streamId);
-    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code: null, error: error.message, command });
+    sendStreamEvent(event.sender, { streamId, type: "end", code: null, error: error.message, command });
   });
   child.on("close", (code) => {
     activeStreams.delete(streamId);
-    event.sender.send(STREAM_CHANNEL, { streamId, type: "end", code, command });
+    sendStreamEvent(event.sender, { streamId, type: "end", code, command });
   });
 
   return { streamId, command };
