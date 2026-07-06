@@ -1,6 +1,6 @@
 {
   "name": "kubeui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Visual Kubernetes desktop client powered by kubectl.",
   "main": "dist-electron/main.js",
   "type": "module",
