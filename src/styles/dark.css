@@ -1,0 +1,235 @@
+/* Tema oscuro. Se activa con data-theme="dark" en <html> (ver src/theme/useTheme).
+   Estrategia: (1) redefinir las variables de theme.css con valores oscuros y
+   (2) sobreescribir las superficies claras que estaban hardcodeadas. Las zonas
+   tipo consola (pre, panel de logs, terminal) ya son oscuras en ambos temas y se
+   dejan intactas. Se importa despues de theme.css, asi que sus reglas ganan; por
+   eso las de logs se re-afirman con mayor especificidad. */
+
+:root[data-theme="dark"] {
+  --kube-bg: #0d1420;
+  --kube-surface: #131c2b;
+  --kube-surface-soft: #1a2536;
+  --kube-surface-raised: #131c2b;
+  --kube-line: #26344a;
+  --kube-line-soft: #1e2a3d;
+  --kube-text: #e6edf7;
+  --kube-muted: #93a4bd;
+  --kube-faint: #6b7a90;
+  --kube-blue-soft: #17263f;
+  --kube-green: #34d399;
+  --kube-green-soft: #10261e;
+  --kube-yellow: #fbbf24;
+  --kube-yellow-soft: #2a2410;
+  --kube-red: #f87171;
+  --kube-red-soft: #2a1414;
+  --kube-purple: #c4b5fd;
+  --kube-purple-soft: #211a33;
+  --kube-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+:root[data-theme="dark"] body {
+  background: var(--kube-bg);
+}
+
+/* Paneles: el gradiente blanco del titulo pasa a superficie oscura. */
+:root[data-theme="dark"] .panel-title {
+  background: var(--kube-surface);
+  border-bottom-color: var(--kube-line-soft);
+}
+
+/* El panel de logs conserva su estetica de consola oscura (mayor especificidad). */
+:root[data-theme="dark"] .logs-panel .panel-title {
+  background: var(--kube-console-2);
+  border-bottom-color: #1d2b43;
+}
+
+/* Tablas */
+:root[data-theme="dark"] th {
+  color: var(--kube-muted);
+  background: #16202f;
+}
+
+:root[data-theme="dark"] td {
+  color: #cfdaea;
+}
+
+:root[data-theme="dark"] tbody tr:hover {
+  background: #182234;
+}
+
+:root[data-theme="dark"] tbody tr.checked:not(.selected) {
+  background: #16233c;
+}
+
+:root[data-theme="dark"] .table-filter {
+  background: var(--kube-surface);
+}
+
+:root[data-theme="dark"] .table-filter-clear:hover {
+  background: #1b2637;
+}
+
+/* Barra de sesion e inputs */
+:root[data-theme="dark"] .session-bar {
+  background: var(--kube-surface);
+}
+
+:root[data-theme="dark"] .session-bar code {
+  color: var(--kube-muted);
+  background: #0f1826;
+}
+
+:root[data-theme="dark"] .session-bar.locked .select-wrap select,
+:root[data-theme="dark"] .session-bar.locked .select-wrap input {
+  color: #8a97aa;
+  background: #141d2b;
+  border-color: var(--kube-line);
+}
+
+:root[data-theme="dark"] .select-wrap select,
+:root[data-theme="dark"] .select-wrap input,
+:root[data-theme="dark"] .terminal-input input,
+:root[data-theme="dark"] .modal-input {
+  border-color: var(--kube-line);
+}
+
+/* Botones */
+:root[data-theme="dark"] .toolbar-button,
+:root[data-theme="dark"] .icon-button {
+  color: var(--kube-text);
+  background: var(--kube-surface);
+  border-color: var(--kube-line);
+}
+
+:root[data-theme="dark"] .toolbar-button:hover,
+:root[data-theme="dark"] .icon-button:hover {
+  background: #1b2637;
+  border-color: #33455f;
+}
+
+:root[data-theme="dark"] .toolbar-button.active {
+  color: #93b4ff;
+  background: #17263f;
+  border-color: #31527f;
+}
+
+/* Los botones dentro del panel de logs mantienen su tono de consola. */
+:root[data-theme="dark"] .logs-panel .toolbar-button,
+:root[data-theme="dark"] .logs-panel .icon-button {
+  color: #d4deeb;
+  background: #101d31;
+  border-color: #263750;
+}
+
+:root[data-theme="dark"] .logs-panel .toolbar-button:hover,
+:root[data-theme="dark"] .logs-panel .icon-button:hover {
+  background: #17263e;
+  border-color: #3a4f70;
+}
+
+:root[data-theme="dark"] .toolbar-button.accent,
+:root[data-theme="dark"] .status-pill.ok,
+:root[data-theme="dark"] .resource-badge.ok {
+  border-color: #1f4d3a;
+}
+
+:root[data-theme="dark"] .toolbar-button.danger,
+:root[data-theme="dark"] .icon-button.danger,
+:root[data-theme="dark"] .status-pill.bad,
+:root[data-theme="dark"] .resource-badge.bad {
+  border-color: #5b2a2a;
+}
+
+:root[data-theme="dark"] .resource-badge.warn {
+  border-color: #4d4020;
+}
+
+:root[data-theme="dark"] .resource-badge.done {
+  border-color: #3a2f5a;
+}
+
+:root[data-theme="dark"] .resource-badge.neutral {
+  color: #aeb9cc;
+  background: #1c2636;
+  border-color: var(--kube-line);
+}
+
+/* Avisos y modales */
+:root[data-theme="dark"] .banner {
+  color: #f6d17a;
+  background: #2a2410;
+  border-color: #4d4020;
+}
+
+:root[data-theme="dark"] .modal {
+  background: var(--kube-surface);
+}
+
+:root[data-theme="dark"] .modal-message {
+  color: var(--kube-text);
+}
+
+:root[data-theme="dark"] .modal-input {
+  color: var(--kube-text);
+  background: var(--kube-surface-soft);
+}
+
+:root[data-theme="dark"] .command-box,
+:root[data-theme="dark"] .table-error code {
+  color: var(--kube-muted);
+  background: #0f1826;
+  border-color: var(--kube-line);
+}
+
+:root[data-theme="dark"] .command-box code {
+  color: var(--kube-muted);
+}
+
+/* Statusbar */
+:root[data-theme="dark"] .statusbar {
+  background: var(--kube-surface);
+  border-top-color: var(--kube-line);
+  box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Inspector de recurso y chips */
+:root[data-theme="dark"] .resource-inspector {
+  background: #16202f;
+}
+
+:root[data-theme="dark"] .label-chip-list span,
+:root[data-theme="dark"] .context-chip-list span {
+  color: #aeb9cc;
+  background: #1c2636;
+  border-color: var(--kube-line);
+}
+
+/* Estados de error/puente (poco frecuentes, por consistencia) */
+:root[data-theme="dark"] .error-boundary {
+  color: var(--kube-text);
+  background: #2a1414;
+  border-color: #5b2a2a;
+}
+
+:root[data-theme="dark"] .error-boundary p {
+  color: var(--kube-muted);
+}
+
+:root[data-theme="dark"] .bridge-error {
+  background: var(--kube-bg);
+}
+
+:root[data-theme="dark"] .bridge-error > div {
+  color: var(--kube-text);
+  background: var(--kube-surface);
+  border-color: var(--kube-line);
+}
+
+:root[data-theme="dark"] .bridge-error p {
+  color: var(--kube-muted);
+}
+
+:root[data-theme="dark"] .bridge-error code {
+  background: #1c2636;
+}

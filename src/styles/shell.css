@@ -1,0 +1,576 @@
+.app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Vista ampliada de logs: se mantienen las pestanas; se ocultan sidebar,
+   barra de sesion y statusbar. El area de trabajo ocupa el resto. */
+.app-shell.logs-expanded {
+  grid-template-rows: auto 1fr;
+}
+
+.tabstrip {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 46px;
+  padding: 0 10px;
+  background: #0f1626;
+  border-bottom: 1px solid #d4dce8;
+}
+
+.sidebar-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  color: #c4cee0;
+  background: transparent;
+  border-radius: 6px;
+}
+
+.sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tabstrip-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.tabstrip-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: none;
+  min-width: 0;
+}
+
+.chrome-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  min-width: 70px;
+  max-width: 220px;
+  padding: 0 12px;
+  flex: 0 1 180px;
+  color: #aeb9cc;
+  background: #1c2638;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+
+.chrome-tab:hover {
+  background: #243149;
+}
+
+.chrome-tab > svg {
+  flex: 0 0 auto;
+}
+
+.chrome-tab span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.chrome-tab .tab-run-dot {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  min-width: 9px;
+  overflow: visible;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.18);
+}
+
+.chrome-tab .tab-run-dot.running {
+  background: #60a5fa;
+  animation: tab-run-pulse 1s ease-in-out infinite;
+}
+
+.chrome-tab .tab-run-dot.done {
+  background: #22c55e;
+}
+
+.chrome-tab .tab-run-dot.stopped {
+  background: #f59e0b;
+}
+
+.chrome-tab .tab-run-dot.error {
+  background: #ef4444;
+}
+
+.chrome-tab .tab-run-dot.pinned::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #e0f2fe;
+}
+
+@keyframes tab-run-pulse {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.72;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+.chrome-tab.active {
+  color: #172033;
+  background: #e8edf4;
+}
+
+.chrome-tab-close {
+  flex: 0 0 auto;
+  border-radius: 4px;
+}
+
+.chrome-tab-close:hover {
+  color: #e23b3b;
+}
+
+.tabstrip-add {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  color: #c4cee0;
+  background: transparent;
+  border-radius: 6px;
+}
+
+.tabstrip-add:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.statusbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 50px;
+  padding: 0 18px;
+  background: #f7f9fc;
+  border-top: 1px solid #d4dce8;
+}
+
+.statusbar .brand {
+  min-width: auto;
+}
+
+.statusbar .brand strong {
+  font-size: 15px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 260px;
+}
+
+.brand svg {
+  color: #246bfe;
+}
+
+.brand div {
+  display: grid;
+  gap: 1px;
+}
+
+.brand strong {
+  font-size: 18px;
+}
+
+.brand span,
+.panel-title p {
+  color: #67748a;
+  font-size: 12px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.status-pill.ok {
+  color: #0b6f43;
+  background: #dff7e8;
+}
+
+.status-pill.bad {
+  color: #a43030;
+  background: #ffe2e2;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-left: auto;
+  color: #43516a;
+  background: #e8edf4;
+  border: 1px solid #cbd5e4;
+  border-radius: 6px;
+}
+
+.icon-button:hover {
+  background: #dde5f0;
+}
+
+.icon-button.danger {
+  color: #aa302c;
+  background: #fff4f2;
+  border-color: #f0c3bd;
+}
+
+.workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(220px, 244px) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace.collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Modo riel: el sidebar se reduce a una columna de iconos (56px) y se expande
+   como overlay al pasar el mouse, sin reacomodar el contenido. El boton de la
+   tabstrip alterna entre este modo y el fijado (ancho completo). */
+.workspace.rail {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+
+/* El sidebar sale del flujo (absolute), asi que el contenido se ancla a la
+   segunda columna para no colocarse bajo el riel. */
+.workspace.rail .content {
+  grid-column: 2;
+}
+
+.workspace.rail .sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 56px;
+  padding: 16px 8px;
+  overflow-x: hidden;
+  transition:
+    width 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.workspace.rail .sidebar:hover {
+  width: 224px;
+  overflow-x: visible;
+  box-shadow: 14px 0 34px rgba(2, 6, 16, 0.42);
+}
+
+/* En reposo (riel sin hover) ocultamos etiquetas y titulos de grupo y centramos
+   los iconos; reaparecen al expandir. */
+.workspace.rail .sidebar:not(:hover) .nav-label,
+.workspace.rail .sidebar:not(:hover) .resource-group-title {
+  display: none;
+}
+
+.workspace.rail .sidebar:not(:hover) .resource-list button,
+.workspace.rail .sidebar:not(:hover) .side-actions button {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  background: #111827;
+  color: #d8e0ec;
+  scrollbar-width: thin;
+  scrollbar-color: #33455f transparent;
+}
+
+.new-tab,
+.tab-button,
+.resource-list button,
+.side-actions button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  color: #d8e0ec;
+  background: transparent;
+  border-radius: 6px;
+  text-align: left;
+}
+
+/* Los iconos de recurso no se encogen ni se tiñen distinto del texto del boton. */
+.resource-list button svg,
+.side-actions button svg {
+  flex: 0 0 auto;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.resource-list button.active svg,
+.side-actions button.active svg {
+  opacity: 1;
+}
+
+.new-tab {
+  justify-content: center;
+  color: #ffffff;
+  background: #246bfe;
+}
+
+.tab-list,
+.resource-list,
+.side-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.tab-button span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-button.active,
+.resource-list button.active,
+.side-actions button.active {
+  color: #ffffff;
+  background: #293449;
+}
+
+.resource-list {
+  padding-top: 0;
+}
+
+.resource-list {
+  display: grid;
+  gap: 14px;
+}
+
+.resource-group {
+  display: grid;
+  gap: 4px;
+}
+
+.resource-group-title {
+  padding: 0 10px;
+  color: #6b7a90;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.side-actions {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #293449;
+}
+
+.content {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  min-height: 0;
+  padding: 18px;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.banner {
+  padding: 10px 12px;
+  color: #7a2e0e;
+  background: #fff2d8;
+  border: 1px solid #f2d19b;
+  border-radius: 6px;
+}
+
+.session-bar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #d8e0ec;
+  border-radius: 8px;
+}
+
+.session-bar label {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 220px;
+  min-width: 160px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.select-wrap select,
+.select-wrap input {
+  min-width: 180px;
+  height: 36px;
+  padding: 0 34px 0 10px;
+  color: #172033;
+  appearance: none;
+  background: #f8fafc;
+  border: 1px solid #cbd5e4;
+  border-radius: 6px;
+}
+
+.session-bar .select-wrap {
+  min-width: 0;
+  width: 100%;
+}
+
+.session-bar .select-wrap select,
+.session-bar .select-wrap input {
+  width: 100%;
+  min-width: 0;
+}
+
+.select-wrap input {
+  font: inherit;
+}
+
+.select-wrap input::-webkit-calendar-picker-indicator {
+  display: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+}
+
+.select-wrap input::-webkit-list-button {
+  display: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.select-wrap svg {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
+  color: #667085;
+}
+
+.session-bar code {
+  flex: 999 1 320px;
+  min-width: min(280px, 100%);
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 9px 10px;
+  color: #43516a;
+  background: #f4f7fb;
+  border: 1px solid #d8e0ec;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.session-bar .toolbar-button,
+.session-bar .icon-button {
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+
+.toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 11px;
+  color: #243044;
+  background: #ffffff;
+  border: 1px solid #cbd5e4;
+  border-radius: 6px;
+  font-weight: 650;
+}
+
+.toolbar-button:hover {
+  background: #f2f6fb;
+}
+
+.toolbar-button.primary {
+  color: #ffffff;
+  background: #246bfe;
+  border-color: #246bfe;
+}
+
+.toolbar-button.danger {
+  color: #a43030;
+  background: #fff4f2;
+  border-color: #f0c3bd;
+}
+
+.toolbar-button.accent {
+  color: #1d6f3c;
+  background: #effaf1;
+  border-color: #bfe6c8;
+}

@@ -1,0 +1,63 @@
+name: Release
+
+# Compila los ejecutables de Windows (portable + instalador NSIS) en un runner
+# de Windows real. Se dispara al pushear un tag v* (creado con npm version) y
+# publica los .exe como GitHub Release. Tambien puede lanzarse a mano desde la
+# pestana Actions (workflow_dispatch) para obtener los .exe como artifacts.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verificar que el tag coincide con package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "El tag v$TAG no coincide con la version $PKG de package.json." >&2
+            exit 1
+          fi
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Empaquetar (portable + NSIS)
+        run: npx electron-builder --win --publish never
+
+      - name: Subir artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeui-windows
+          path: |
+            release/*.exe
+            release/latest.yml
+
+      - name: Publicar GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/*.exe
+            release/latest.yml

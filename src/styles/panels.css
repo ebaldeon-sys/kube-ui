@@ -1,0 +1,110 @@
+/* Barra de comando con estetica de consola: fondo oscuro, prompt y monospace,
+   unificada con la salida negra de abajo (no un simple cuadro de texto claro).
+   Prefijo .terminal-panel para ganar a la regla clara de theme.css. */
+.terminal-panel .terminal-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--kube-console-2, #0a1628);
+  border-bottom: 1px solid #16243a;
+}
+
+.terminal-prompt {
+  flex: 0 0 auto;
+  color: #4ade80;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+/* Prefijo .terminal-panel para ganar a la regla generica de inputs de theme.css. */
+.terminal-panel .terminal-input input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 11px;
+  color: #e6edf7;
+  background: #07111f;
+  border: 1px solid #263750;
+  border-radius: 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  color-scheme: dark;
+}
+
+.terminal-panel .terminal-input input::placeholder {
+  color: #5a6b85;
+}
+
+.terminal-panel .terminal-input input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+/* Botones de la barra del terminal en tono consola (claro y oscuro). */
+.terminal-input .toolbar-button {
+  color: #d4deeb;
+  background: #101d31;
+  border-color: #263750;
+}
+
+.terminal-input .toolbar-button:hover:not(:disabled) {
+  background: #17263e;
+  border-color: #3a4f70;
+}
+
+.terminal-input .toolbar-button.danger {
+  color: var(--kube-red);
+  background: #2a1414;
+  border-color: #5b2a2a;
+}
+
+.terminal-output {
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
+}
+
+.apply-panel textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  resize: none;
+  color: #d8e0ec;
+  background: #0b1020;
+  border: 0;
+  outline: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 24px;
+  color: #67748a;
+  font-size: 13px;
+}
+
+.loading-state .spin {
+  color: #246bfe;
+  animation: kube-spin 0.9s linear infinite;
+}
+
+@keyframes kube-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
