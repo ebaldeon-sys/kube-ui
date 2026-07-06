@@ -1,0 +1,62 @@
+name: Auto Release
+
+# En cada push/merge a main sube automaticamente la version patch, crea el tag
+# vX.Y.Z y dispara el workflow de Release (que compila los .exe en Windows y
+# publica el GitHub Release).
+#
+# El commit de bump lleva [skip ci] para que su propio push no vuelva a
+# disparar este workflow (GitHub omite los workflows de commits con esa marca).
+# Ademas, el tag se pushea con GITHUB_TOKEN, cuyos eventos no crean workflow
+# runs, por eso el paso final dispara release.yml explicitamente via
+# workflow_dispatch (excepcion permitida para GITHUB_TOKEN).
+#
+# Para un bump minor/major usa el flujo manual: npm run release:minor|major
+# y git push --follow-tags (ese tag, pusheado con tus credenciales, dispara
+# release.yml directamente y el [skip ci] del commit evita el doble bump).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump de version patch y tag
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !startsWith(github.event.head_commit.message, 'chore(release)')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar identidad git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Subir version patch y crear tag
+        id: bump
+        run: |
+          npm version patch -m "chore(release): v%s [skip ci]"
+          echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Push de commit y tag
+        run: git push --follow-tags
+
+      - name: Disparar build y publicacion del release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "${{ steps.bump.outputs.tag }}"
